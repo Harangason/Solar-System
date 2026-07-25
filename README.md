@@ -404,84 +404,31 @@ $$
 
 Die Transfergeometrie verwendet:
 
-$$
-c
-=
-\frac{\mathbf r_1\cdot\mathbf r_2}
-{\|\mathbf r_1\|\,\|\mathbf r_2\|}
-$$
+$$ c = \frac{\mathbf r_1\cdot\mathbf r_2}{\|\mathbf r_1\|\,\|\mathbf r_2\|} $$
 
-$$
-A
-=
-\sigma
-\sqrt{
-\frac{\|\mathbf r_1\|\|\mathbf r_2\|(1+c)}
-{1-c}
-},
-\qquad
-\sigma\in\{+1,-1\}
-$$
+$$ A = \sigma \sqrt{\frac{\|\mathbf r_1\|\|\mathbf r_2\|(1+c)}{1-c}}, \qquad \sigma\in\{+1,-1\} $$
 
 Die universelle Variable `z` wird mit Stumpff-Funktionen berechnet:
 
-$$
-C(z)
-=
-\begin{cases}
-\dfrac{1-\cos\sqrt z}{z}, & z>0,\\[6pt]
-\dfrac{\cosh\sqrt{-z}-1}{-z}, & z<0,\\[6pt]
-\dfrac{1}{2}, & z=0
-\end{cases}
-$$
+$$ C(z) = \begin{cases} \dfrac{1-\cos\sqrt z}{z}, & z>0,\\[6pt] \dfrac{\cosh\sqrt{-z}-1}{-z}, & z<0,\\[6pt] \dfrac{1}{2}, & z=0 \end{cases} $$
 
-$$
-S(z)
-=
-\begin{cases}
-\dfrac{\sqrt z-\sin\sqrt z}{(\sqrt z)^3}, & z>0,\\[6pt]
-\dfrac{\sinh\sqrt{-z}-\sqrt{-z}}{(\sqrt{-z})^3}, & z<0,\\[6pt]
-\dfrac{1}{6}, & z=0
-\end{cases}
-$$
+$$ S(z) = \begin{cases} \dfrac{\sqrt z-\sin\sqrt z}{(\sqrt z)^3}, & z>0,\\[6pt] \dfrac{\sinh\sqrt{-z}-\sqrt{-z}}{(\sqrt{-z})^3}, & z<0,\\[6pt] \dfrac{1}{6}, & z=0 \end{cases} $$
 
 Mit
 
-$$
-y(z)
-=
-\|\mathbf r_1\|+\|\mathbf r_2\|
-+ A\,\frac{zS(z)-1}{\sqrt{C(z)}}
-$$
+$$ y(z) = \|\mathbf r_1\|+\|\mathbf r_2\| + A\,\frac{zS(z)-1}{\sqrt{C(z)}} $$
 
 und der Zeitgleichung
 
-$$
-\sqrt{\mu_\odot}\Delta t
-=
-\left(\frac{y}{C}\right)^{3/2}S
-+ A\sqrt{y}
-$$
+$$ \sqrt{\mu_\odot}\Delta t = \left(\frac{y}{C}\right)^{3/2}S + A\sqrt{y} $$
 
 wird `z` numerisch bestimmt. Danach folgen die Lagrange-Koeffizienten:
 
-$$
-f
-=
-1-\frac{y}{\|\mathbf r_1\|}
-$$
+$$ f = 1-\frac{y}{\|\mathbf r_1\|} $$
 
-$$
-g
-=
-A\sqrt{\frac{y}{\mu_\odot}}
-$$
+$$ g = A\sqrt{\frac{y}{\mu_\odot}} $$
 
-$$
-\dot g
-=
-1-\frac{y}{\|\mathbf r_2\|}
-$$
+$$ \dot g = 1-\frac{y}{\|\mathbf r_2\|} $$
 
 Abflug- und Ankunftsgeschwindigkeit:
 
