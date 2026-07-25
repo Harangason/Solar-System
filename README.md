@@ -167,45 +167,29 @@ Backend und Frontend verwenden vereinfachte Kepler-Elemente
 `$(a,e,i,\Omega,\omega,M)$`. Aus mittlerer Laenge `$L$`, Laenge des Perihels
 `$\varpi$` und Knotenlaenge `$\Omega$` werden die benoetigten Winkel bestimmt:
 
-$$
-M = L-\varpi
-$$
+$$ M = L-\varpi $$
 
-$$
-\omega = \varpi-\Omega
-$$
+$$ \omega = \varpi-\Omega $$
 
 Die exzentrische Anomalie `E` wird mit Newton-Iteration aus Keplers Gleichung
 berechnet:
 
-$$
-E - e\sin(E) = M
-$$
+$$ E - e\sin(E) = M $$
 
 Der Zusammenhang zwischen exzentrischer Anomalie `$E$` und wahrer Anomalie
 `$\nu$` folgt in der ueblichen Form:
 
-$$
-\tan\frac{\nu}{2}
-=
-\sqrt{\frac{1+e}{1-e}}\,
-\tan\frac{E}{2}
-$$
+$$ \tan\frac{\nu}{2} = \sqrt{\frac{1+e}{1-e}}\,\tan\frac{E}{2} $$
 
 Der Bahnradius der Keplerellipse kann damit wahlweise ueber `$E$` oder
 `$\nu$` angegeben werden:
 
-$$
-r
-= a(1-e\cos E)
-= \frac{a(1-e^2)}{1+e\cos\nu}
-$$
+$$ r = a(1-e\cos E) = \frac{a(1-e^2)}{1+e\cos\nu} $$
 
 Die kartesische Position in der Bahnebene lautet:
 
 $$
-\mathbf r'
-=
+\mathbf r' =
 \begin{bmatrix}
 a(\cos E-e)\\
 a\sqrt{1-e^2}\sin E\\
@@ -215,10 +199,7 @@ $$
 
 Die Rotation in das ekliptikale Inertialsystem erfolgt ueber:
 
-$$
-\mathbf r
-= R_z(\Omega)\,R_x(i)\,R_z(\omega)\,\mathbf r'
-$$
+$$ \mathbf r = R_z(\Omega)\,R_x(i)\,R_z(\omega)\,\mathbf r' $$
 
 Damit ist die im Code verwendete direkte `$x',y'$`-Berechnung die kartesische
 Auswertung derselben Kepler-Geometrie.
