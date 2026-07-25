@@ -227,54 +227,29 @@ und fuehrt am Perihel ein impulsives Solar-Oberth-Manoever aus.
 
 Der gewaehlte Perihelabstand der Sundiver-Bahn ist:
 
-$$
-r_p = q\,\mathrm{AU}
-$$
+$$ r_p = q\,\mathrm{AU} $$
 
 Mit Startabstand $r_0=\|\mathbf r_0\|$ ergibt sich die Halbachse der
 Transferellipse:
 
-$$
-a_t = \frac{r_0+r_p}{2}
-$$
+$$ a_t = \frac{r_0+r_p}{2} $$
 
 Die Geschwindigkeit auf der Transferellipse folgt aus der Vis-Viva-Gleichung:
 
-$$
-v(r)
-=
-\sqrt{\mu_\odot
-\left(
-\frac{2}{r}
-- \frac{1}{a_t}
-\right)}
-$$
+$$ v(r) = \sqrt{\mu_\odot\left(\frac{2}{r} - \frac{1}{a_t}\right)} $$
 
 Der Oberth-Burn wird entlang des aktuellen Geschwindigkeitsvektors addiert:
 
-$$
-\mathbf v^+
-= \mathbf v^-
-+ \Delta v_{\mathrm{Oberth}}\,
-  \frac{\mathbf v^-}{\|\mathbf v^-\|}
-$$
+$$ \mathbf v^+ = \mathbf v^- + \Delta v_{\mathrm{Oberth}}\,\frac{\mathbf v^-}{\|\mathbf v^-\|} $$
 
 Die thermische Last am Perihel wird aus der invers-quadratischen
 Sonnenstrahlung berechnet:
 
-$$
-S(r)
-= S_0
-  \left(\frac{1\,\mathrm{AU}}{r}\right)^2
-$$
+$$ S(r) = S_0\left(\frac{1\,\mathrm{AU}}{r}\right)^2 $$
 
 Beispiel: Bei `q = 0.05 AU` ergibt sich:
 
-$$
-S(0.05\,\mathrm{AU})
-= \frac{1361}{0.05^2}
-\approx 5.44\cdot10^5\ \mathrm{W\,m^{-2}}
-$$
+$$ S(0.05\,\mathrm{AU}) = \frac{1361}{0.05^2} \approx 5.44\cdot10^5\ \mathrm{W\,m^{-2}} $$
 
 Die Hitzeschildgrenze wird mit `heatshieldLimitWm2` verglichen.
 
@@ -294,25 +269,13 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 Kick-Stufe und Solar-Oberth-Burn nutzen die Raketengrundgleichung:
 
-$$
-\Delta v
-= I_{sp}g_0\ln\left(\frac{m_0}{m_f}\right)
-$$
+$$ \Delta v = I_{sp}g_0\ln\left(\frac{m_0}{m_f}\right) $$
 
 Daraus folgt fuer eine angeforderte Geschwindigkeitsaenderung:
 
-$$
-m_f
-= m_0\exp\left(-\frac{\Delta v}{I_{sp}g_0}\right)
-$$
+$$ m_f = m_0\exp\left(-\frac{\Delta v}{I_{sp}g_0}\right) $$
 
-$$
-m_{\mathrm{prop}}
-= m_0-m_f
-= m_0\left[
-1-\exp\left(-\frac{\Delta v}{I_{sp}g_0}\right)
-\right]
-$$
+$$ m_{\mathrm{prop}} = m_0-m_f = m_0\left[1-\exp\left(-\frac{\Delta v}{I_{sp}g_0}\right)\right] $$
 
 Falls nicht genug Treibstoff verfuegbar ist, wird nur das erreichbare
 `Delta-v` geliefert. Die Logik liegt in `satellite.KickStage.burn()` und wird
@@ -334,11 +297,7 @@ Grenzwert- und Singularitaetsbetrachtung:
 Kontinuierliche Antriebsmodule liefern einen Schubvektor $\mathbf F$ und
 daraus eine Beschleunigung:
 
-$$
-\mathbf a_{\mathrm{prop}}
-= \frac{\mathbf F}{m}
-= \frac{F}{m}\,\hat{\mathbf d}
-$$
+$$ \mathbf a_{\mathrm{prop}} = \frac{\mathbf F}{m} = \frac{F}{m}\,\hat{\mathbf d} $$
 
 Die Richtung $\hat{\mathbf d}$ wird je nach Modul als prograd, retrograd,
 radial nach aussen oder radial nach innen aus $\mathbf r$ und $\mathbf v$
@@ -346,34 +305,21 @@ gebildet.
 
 Solar Sail:
 
-$$
-F_{\mathrm{SS}}
-= p_0\,A\,C_R
-  \left(\frac{1\,\mathrm{AU}}{r}\right)^2
-$$
+$$ F_{\mathrm{SS}} = p_0\,A\,C_R\left(\frac{1\,\mathrm{AU}}{r}\right)^2 $$
 
 Im Code ist $p_0=9.08\cdot10^{-6}\,\mathrm{N\,m^{-2}}$; $A$ ist die
 Segelflaeche und $C_R$ der Reflexionsfaktor.
 
 Electric Sail:
 
-$$
-F_{\mathrm{ES}}
-=
-\left(\frac{N L}{2000}\right)
-\left(\frac{U}{20\,\mathrm{kV}}\right)
-\frac{\eta_{\mathrm{sw}}}{\max(r/\mathrm{AU},0.1)}
-$$
+$$ F_{\mathrm{ES}} = \left(\frac{N L}{2000}\right)\left(\frac{U}{20\,\mathrm{kV}}\right)\frac{\eta_{\mathrm{sw}}}{\max(r/\mathrm{AU},0.1)} $$
 
 Dabei bezeichnet $N$ die Tetheranzahl, $L$ die Tetherlaenge in Kilometern,
 $U$ die Tetherspannung und $\eta_{\mathrm{sw}}$ den Solarwind-Faktor.
 
 Elektrische Triebwerke verbrauchen Treibstoff ueber:
 
-$$
-\dot m
-= \frac{F}{I_{sp}g_0}
-$$
+$$ \dot m = \frac{F}{I_{sp}g_0} $$
 
 Die Implementierung steht in `propulsion.py`.
 
@@ -394,13 +340,7 @@ Grenzwert- und Singularitaetsbetrachtung:
 Fuer Wegpunkt-Routen wird zwischen zwei Randpunkten eine
 Lambert-Randwertaufgabe geloest:
 
-$$
-\mathbf r(t_1)=\mathbf r_1,
-\qquad
-\mathbf r(t_2)=\mathbf r_2,
-\qquad
-\Delta t=t_2-t_1
-$$
+$$ \mathbf r(t_1)=\mathbf r_1, \qquad \mathbf r(t_2)=\mathbf r_2, \qquad \Delta t=t_2-t_1 $$
 
 Die Transfergeometrie verwendet:
 
@@ -432,24 +372,14 @@ $$ \dot g = 1-\frac{y}{\|\mathbf r_2\|} $$
 
 Abflug- und Ankunftsgeschwindigkeit:
 
-$$
-\mathbf v_1 = \frac{\mathbf r_2 - f\mathbf r_1}{g}
-$$
+$$ \mathbf v_1 = \frac{\mathbf r_2 - f\mathbf r_1}{g} $$
 
-$$
-\mathbf v_2 = \frac{\dot g\mathbf r_2 - \mathbf r_1}{g}
-$$
+$$ \mathbf v_2 = \frac{\dot g\mathbf r_2 - \mathbf r_1}{g} $$
 
 Der beste Kandidat minimiert den Vektorunterschied zur vorhandenen
 Grenzgeschwindigkeit:
 
-$$
-\Delta v_{\mathrm{inj}}
-=
-\left\|
-\mathbf v_1-\mathbf v_{\mathrm{ref}}
-\right\|
-$$
+$$ \Delta v_{\mathrm{inj}} = \left\|\mathbf v_1-\mathbf v_{\mathrm{ref}}\right\| $$
 
 Code: `route_planner._lambert_candidates()`,
 `route_planner._select_lambert()` und
@@ -473,101 +403,43 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 Die planetare Einflusssphaere wird mit der Laplace-Approximation berechnet:
 
-$$
-r_{\mathrm{SOI}}
-=
-a_p
-\left(
-\frac{m_p}{M_\odot}
-\right)^{2/5}
-$$
+$$ r_{\mathrm{SOI}} = a_p\left(\frac{m_p}{M_\odot}\right)^{2/5} $$
 
 Die planetenzentrierte Ueberschussgeschwindigkeit:
 
-$$
-\mathbf v_{\infty}^{-}
-=
-\mathbf v_{\mathrm{arr}}
-- \mathbf v_p
-$$
+$$ \mathbf v_{\infty}^{-} = \mathbf v_{\mathrm{arr}} - \mathbf v_p $$
 
-$$
-v_\infty
-=
-\left\|
-\mathbf v_{\infty}^{-}
-\right\|
-$$
+$$ v_\infty = \left\|\mathbf v_{\infty}^{-}\right\| $$
 
 Der sichere Perizentrumsabstand wird aus Planetenradius und Mindesthoehe
 gebildet:
 
-$$
-r_{p,\min}
-= R_p+h_{\min}
-$$
+$$ r_{p,\min} = R_p+h_{\min} $$
 
 Maximaler sicherer Ablenkwinkel:
 
-$$
-\delta_{\max}
-= 2\arcsin
-\left(
-\frac{1}
-{1+r_{p,\min}v_\infty^2/\mu_p}
-\right)
-$$
+$$ \delta_{\max} = 2\arcsin\left(\frac{1}{1+r_{p,\min}v_\infty^2/\mu_p}\right) $$
 
 Tatsaechliches Perizentrum aus gewaehltem Ablenkwinkel:
 
-$$
-r_p
-=
-\frac{\mu_p}{v_\infty^2}
-\left[
-\frac{1}{\sin(\delta/2)}
--1
-\right]
-$$
+$$ r_p = \frac{\mu_p}{v_\infty^2}\left[\frac{1}{\sin(\delta/2)}-1\right] $$
 
 Ein unpowered Swing-by erhaelt den Betrag der
 Ueberschussgeschwindigkeit:
 
-$$
-\left\|\mathbf v_{\infty}^{+}\right\|
-=
-\left\|\mathbf v_{\infty}^{-}\right\|
-=v_\infty
-$$
+$$ \left\|\mathbf v_{\infty}^{+}\right\| = \left\|\mathbf v_{\infty}^{-}\right\| = v_\infty $$
 
 Der heliozentrische Ausgangszustand ist:
 
-$$
-\mathbf v_{\mathrm{out}}
-=
-\mathbf v_p+\mathbf v_{\infty}^{+}
-$$
+$$ \mathbf v_{\mathrm{out}} = \mathbf v_p+\mathbf v_{\infty}^{+} $$
 
 Die Hyperbel wird ueber die hyperbolische Anomalie `H` parametrisiert:
 
-$$
-x(H)
-=
-a_h(e_h-\cosh H)
-$$
+$$ x(H) = a_h(e_h-\cosh H) $$
 
-$$
-y(H)
-=
-a_h\sqrt{e_h^2-1}\sinh H
-$$
+$$ y(H) = a_h\sqrt{e_h^2-1}\sinh H $$
 
-$$
-t(H)
-=
-\sqrt{\frac{a_h^3}{\mu_p}}
-\left(e_h\sinh H-H\right)
-$$
+$$ t(H) = \sqrt{\frac{a_h^3}{\mu_p}}\left(e_h\sinh H-H\right) $$
 
 Die Routinen liegen in `route_planner.py`; Details und Audit-Regeln stehen in
 `CALCULATION_METHODS.md`.
@@ -594,27 +466,15 @@ Exzentrizitaetsvektor die solare Hyperbelasymptote berechnet.
 
 Spezifische Bahnenergie:
 
-$$
-\epsilon
-=
-\frac{\|\mathbf v\|^2}{2}
--\frac{\mu_\odot}{\|\mathbf r\|}
-$$
+$$ \epsilon = \frac{\|\mathbf v\|^2}{2} -\frac{\mu_\odot}{\|\mathbf r\|} $$
 
 Drehimpuls:
 
-$$
-\mathbf h = \mathbf r \times \mathbf v
-$$
+$$ \mathbf h = \mathbf r \times \mathbf v $$
 
 Exzentrizitaetsvektor:
 
-$$
-\mathbf e
-=
-\frac{\mathbf v\times\mathbf h}{\mu_\odot}
--\frac{\mathbf r}{\|\mathbf r\|}
-$$
+$$ \mathbf e = \frac{\mathbf v\times\mathbf h}{\mu_\odot} -\frac{\mathbf r}{\|\mathbf r\|} $$
 
 Fuer $\|\mathbf e\|>1$ liegt eine solare Fluchthyperbel vor. Mit
 Periapsisrichtung $\hat{\mathbf p}=\mathbf e/\|\mathbf e\|$,
@@ -622,44 +482,21 @@ Bahnnormale $\hat{\mathbf h}=\mathbf h/\|\mathbf h\|$ und
 Transversalrichtung $\hat{\mathbf q}=\hat{\mathbf h}\times\hat{\mathbf p}$
 ergibt sich die asymptotische wahre Anomalie:
 
-$$
-\nu_\infty
-=
-\arccos\left(-\frac{1}{\|\mathbf e\|}\right)
-$$
+$$ \nu_\infty = \arccos\left(-\frac{1}{\|\mathbf e\|}\right) $$
 
 Die ausgehende Asymptotenrichtung:
 
-$$
-\hat{\mathbf s}_\infty
-=
-\hat{\mathbf p}\cos\nu_\infty
-+\hat{\mathbf q}\sin\nu_\infty
-$$
+$$ \hat{\mathbf s}_\infty = \hat{\mathbf p}\cos\nu_\infty +\hat{\mathbf q}\sin\nu_\infty $$
 
 Der Zielfehler zum normierten Zielvektor $\hat{\mathbf t}$ wird als
 Winkelrest bewertet:
 
-$$
-\alpha
-=
-\arccos
-\left(
-\hat{\mathbf s}_\infty\cdot\hat{\mathbf t}
-\right)
-$$
+$$ \alpha = \arccos\left(\hat{\mathbf s}_\infty\cdot\hat{\mathbf t}\right) $$
 
 Falls der rein gravitative Swing-by nicht reicht, weist der Code ein separates
 Zielinjektions-Delta-v aus:
 
-$$
-\Delta v_{\mathrm{target}}
-=
-\left\|
-\mathbf v_{\mathrm{target}}
--\mathbf v_{\mathrm{gravity}}
-\right\|
-$$
+$$ \Delta v_{\mathrm{target}} = \left\|\mathbf v_{\mathrm{target}} -\mathbf v_{\mathrm{gravity}}\right\| $$
 
 Grenzwert- und Singularitaetsbetrachtung:
 
