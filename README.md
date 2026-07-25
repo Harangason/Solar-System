@@ -55,25 +55,25 @@ Routenberechnung sowie 2D/3D-Visualisierung auf.
 
 | Groesse | Symbol | Wert / Quelle | Code |
 | --- | --- | --- | --- |
-| Astronomische Einheit | `$1\,\mathrm{AU}$` | `149597870.7 km` | `trajectory.AU_KM`, `web/src/missionSimulation.ts` |
-| Sonnen-Gravitationsparameter | `$\mu_\odot$` | `1.32712440018e11 km^3/s^2` | `trajectory.MU_SUN` |
-| Erd-Gravitationsparameter | `$\mu_\oplus$` | `398600.4418 km^3/s^2` | `trajectory.MU_EARTH` |
-| Erdradius | `$R_\oplus$` | `6378.137 km` | `trajectory.EARTH_RADIUS_KM` |
-| Solarkonstante bei 1 AU | `$S_0$` | `1361 W/m^2` | `trajectory.SOLAR_CONSTANT_W_M2` |
-| Normfallbeschleunigung | `$g_0$` | `9.80665 m/s^2` | `propulsion.G0_M_S2`, `satellite.G0_KM_S2` |
+| Astronomische Einheit | $1\,\mathrm{AU}$ | `149597870.7 km` | `trajectory.AU_KM`, `web/src/missionSimulation.ts` |
+| Sonnen-Gravitationsparameter | $\mu_\odot$ | `1.32712440018e11 km^3/s^2` | `trajectory.MU_SUN` |
+| Erd-Gravitationsparameter | $\mu_\oplus$ | `398600.4418 km^3/s^2` | `trajectory.MU_EARTH` |
+| Erdradius | $R_\oplus$ | `6378.137 km` | `trajectory.EARTH_RADIUS_KM` |
+| Solarkonstante bei 1 AU | $S_0$ | `1361 W/m^2` | `trajectory.SOLAR_CONSTANT_W_M2` |
+| Normfallbeschleunigung | $g_0$ | `9.80665 m/s^2` | `propulsion.G0_M_S2`, `satellite.G0_KM_S2` |
 
 Notation:
 
 | Symbol | Bedeutung |
 | --- | --- |
-| `$\mathbf r$` | heliozentrischer Ortsvektor |
-| `$\mathbf v$` | heliozentrischer Geschwindigkeitsvektor |
-| `$r=\|\mathbf r\|$` | Sonnenabstand |
-| `$\hat{\mathbf r}=\mathbf r/r$` | radialer Einheitsvektor |
-| `$\hat{\mathbf v}=\mathbf v/\|\mathbf v\|$` | tangentialer Einheitsvektor in Bewegungsrichtung |
-| `$\Delta t$` | Integrations- oder Flugzeitintervall |
-| `$\Delta v$` | impulsive Geschwindigkeitsaenderung |
-| `$a,e,i,\Omega,\omega,M$` | klassische Bahnelemente: grosse Halbachse, Exzentrizitaet, Inklination, Knotenlaenge, Argument des Perihels, mittlere Anomalie |
+| $\mathbf r$ | heliozentrischer Ortsvektor |
+| $\mathbf v$ | heliozentrischer Geschwindigkeitsvektor |
+| $r=\|\mathbf r\|$ | Sonnenabstand |
+| $\hat{\mathbf r}=\mathbf r/r$ | radialer Einheitsvektor |
+| $\hat{\mathbf v}=\mathbf v/\|\mathbf v\|$ | tangentialer Einheitsvektor in Bewegungsrichtung |
+| $\Delta t$ | Integrations- oder Flugzeitintervall |
+| $\Delta v$ | impulsive Geschwindigkeitsaenderung |
+| $a,e,i,\Omega,\omega,M$ | klassische Bahnelemente: grosse Halbachse, Exzentrizitaet, Inklination, Knotenlaenge, Argument des Perihels, mittlere Anomalie |
 
 ## Dynamikgleichung
 
@@ -127,7 +127,7 @@ $$
 
 Die Implementierung steht in `trajectory._acceleration()`. Die Integration
 erfolgt in `trajectory._rk4()` mit klassischem Runge-Kutta vierter Ordnung fuer
-`$\dot{\mathbf x}=\mathbf f(t,\mathbf x)$`:
+$\dot{\mathbf x}=\mathbf f(t,\mathbf x)$:
 
 $$
 \begin{aligned}
@@ -153,19 +153,19 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| `$\mathbf a_\odot=-\mu_\odot\mathbf r/\|\mathbf r\|^3$` | `$\|\mathbf r\|\rightarrow0$` | Singularitaet im Zentrum des Sonnenpotentials | Physikalisch unzulaessiger Zustand; die Missionskonfiguration erzwingt ein Perihel ausserhalb der Sonne. |
-| `$\hat{\mathbf r}=\mathbf r/\|\mathbf r\|$` | `$\|\mathbf r\|=0$` | Radialrichtung undefiniert | `_normalize()` verwendet eine Ersatzlaenge, die Simulation soll diesen Zustand aber durch Validierung vermeiden. |
-| `$\hat{\mathbf v}=\mathbf v/\|\mathbf v\|$` | `$\|\mathbf v\|=0$` | Bewegungsrichtung undefiniert | Fuer Burns nur sinnvoll bei nicht verschwindender Geschwindigkeit; `_normalize()` verhindert Division durch null, ersetzt aber keine physikalische Freigabe. |
-| RK4-Schritt | `$\Delta t\le0$` oder zu grosses `$\Delta t$` | Keine Vorwaertspropagation bzw. Integrationsfehler | Schrittweiten werden radiusabhaengig begrenzt; nahe der Sonne kleinere Schritte. |
-| Stoerbeschleunigung | Abstand Sonde-Planet `$\rightarrow0$` | Planetare Stoerterme wuerden singulaer | Innerhalb der planetaren SOI wird der heliocentrische Stoerterm uebersprungen und das lokale Patched-Conic-Modell verwendet. |
+| $\mathbf a_\odot=-\mu_\odot\mathbf r/\|\mathbf r\|^3$ | $\|\mathbf r\|\rightarrow0$ | Singularitaet im Zentrum des Sonnenpotentials | Physikalisch unzulaessiger Zustand; die Missionskonfiguration erzwingt ein Perihel ausserhalb der Sonne. |
+| $\hat{\mathbf r}=\mathbf r/\|\mathbf r\|$ | $\|\mathbf r\|=0$ | Radialrichtung undefiniert | `_normalize()` verwendet eine Ersatzlaenge, die Simulation soll diesen Zustand aber durch Validierung vermeiden. |
+| $\hat{\mathbf v}=\mathbf v/\|\mathbf v\|$ | $\|\mathbf v\|=0$ | Bewegungsrichtung undefiniert | Fuer Burns nur sinnvoll bei nicht verschwindender Geschwindigkeit; `_normalize()` verhindert Division durch null, ersetzt aber keine physikalische Freigabe. |
+| RK4-Schritt | $\Delta t\le0$ oder zu grosses $\Delta t$ | Keine Vorwaertspropagation bzw. Integrationsfehler | Schrittweiten werden radiusabhaengig begrenzt; nahe der Sonne kleinere Schritte. |
+| Stoerbeschleunigung | Abstand Sonde-Planet $\rightarrow0$ | Planetare Stoerterme wuerden singulaer | Innerhalb der planetaren SOI wird der heliocentrische Stoerterm uebersprungen und das lokale Patched-Conic-Modell verwendet. |
 
 ## Planetenpositionen
 
 <img src="docs/assets/formulas/kepler-anomalies.svg" alt="Kepler anomaly and radius relations" width="720">
 
 Backend und Frontend verwenden vereinfachte Kepler-Elemente
-`$(a,e,i,\Omega,\omega,M)$`. Aus mittlerer Laenge `$L$`, Laenge des Perihels
-`$\varpi$` und Knotenlaenge `$\Omega$` werden die benoetigten Winkel bestimmt:
+$(a,e,i,\Omega,\omega,M)$. Aus mittlerer Laenge $L$, Laenge des Perihels
+$\varpi$ und Knotenlaenge $\Omega$ werden die benoetigten Winkel bestimmt:
 
 $$ M = L-\varpi $$
 
@@ -176,13 +176,13 @@ berechnet:
 
 $$ E - e\sin(E) = M $$
 
-Der Zusammenhang zwischen exzentrischer Anomalie `$E$` und wahrer Anomalie
-`$\nu$` folgt in der ueblichen Form:
+Der Zusammenhang zwischen exzentrischer Anomalie $E$ und wahrer Anomalie
+$\nu$ folgt in der ueblichen Form:
 
 $$ \tan\frac{\nu}{2} = \sqrt{\frac{1+e}{1-e}}\,\tan\frac{E}{2} $$
 
-Der Bahnradius der Keplerellipse kann damit wahlweise ueber `$E$` oder
-`$\nu$` angegeben werden:
+Der Bahnradius der Keplerellipse kann damit wahlweise ueber $E$ oder
+$\nu$ angegeben werden:
 
 $$ r = a(1-e\cos E) = \frac{a(1-e^2)}{1+e\cos\nu} $$
 
@@ -201,7 +201,7 @@ Die Rotation in das ekliptikale Inertialsystem erfolgt ueber:
 
 $$ \mathbf r = R_z(\Omega)\,R_x(i)\,R_z(\omega)\,\mathbf r' $$
 
-Damit ist die im Code verwendete direkte `$x',y'$`-Berechnung die kartesische
+Damit ist die im Code verwendete direkte $x',y'$-Berechnung die kartesische
 Auswertung derselben Kepler-Geometrie.
 
 Die zugehoerigen Implementierungen sind `trajectory._planet_position_at()` und
@@ -211,11 +211,11 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| `$E-e\sin E=M$` | `$e\rightarrow1$` | Parabolischer Grenzfall; Newton-Iteration kann schlecht konditioniert werden | Die verwendeten Planetendaten liegen im elliptischen Bereich `$0\le e<1$`. |
-| `$\tan(\nu/2)=\sqrt{(1+e)/(1-e)}\tan(E/2)$` | `$e\rightarrow1$` | Nenner `$1-e\rightarrow0$`; elliptische Formel geht in parabolische Grenzform ueber | Nur fuer elliptische Planetenbahnen dokumentiert; nicht fuer parabolische/hyperbolische Kometenbahnen verwenden. |
-| `$\tan(E/2)$` | `$E\rightarrow\pi$` | Tangens divergiert; `$\nu$` ist trotzdem geometrisch definiert | In der Implementierung wird die kartesische `$x',y'$`-Form aus `$\sin E,\cos E$` genutzt und umgeht diesen Tangens-Pol. |
-| `$r=a(1-e\cos E)$` | `$a\le0$` oder `$e\ge1$` | Ellipsenradius nicht mehr im verwendeten Modell definiert | Planetendaten werden als elliptische J2000-Naeherung interpretiert. |
-| `$r=a(1-e^2)/(1+e\cos\nu)$` | `$1+e\cos\nu=0$` | Pol der Kegelschnittgleichung; bei Ellipsen mit `$e<1$` nicht erreichbar | Fuer die verwendeten Planetenellipsen bleibt der Nenner positiv. |
+| $E-e\sin E=M$ | $e\rightarrow1$ | Parabolischer Grenzfall; Newton-Iteration kann schlecht konditioniert werden | Die verwendeten Planetendaten liegen im elliptischen Bereich $0\le e<1$. |
+| $\tan(\nu/2)=\sqrt{(1+e)/(1-e)}\tan(E/2)$ | $e\rightarrow1$ | Nenner $1-e\rightarrow0$; elliptische Formel geht in parabolische Grenzform ueber | Nur fuer elliptische Planetenbahnen dokumentiert; nicht fuer parabolische/hyperbolische Kometenbahnen verwenden. |
+| $\tan(E/2)$ | $E\rightarrow\pi$ | Tangens divergiert; $\nu$ ist trotzdem geometrisch definiert | In der Implementierung wird die kartesische $x',y'$-Form aus $\sin E,\cos E$ genutzt und umgeht diesen Tangens-Pol. |
+| $r=a(1-e\cos E)$ | $a\le0$ oder $e\ge1$ | Ellipsenradius nicht mehr im verwendeten Modell definiert | Planetendaten werden als elliptische J2000-Naeherung interpretiert. |
+| $r=a(1-e^2)/(1+e\cos\nu)$ | $1+e\cos\nu=0$ | Pol der Kegelschnittgleichung; bei Ellipsen mit $e<1$ nicht erreichbar | Fuer die verwendeten Planetenellipsen bleibt der Nenner positiv. |
 | Rotationsmatrix | Winkel beliebig, aber nicht normalisiert | Mathematisch gueltig, numerisch koennen grosse Winkel Genauigkeit kosten | Winkel werden aus J2000-Elementen und Zeitfortschritt berechnet; trigonometrische Funktionen normalisieren periodisch. |
 
 ## Solar-Oberth-Mission
@@ -231,7 +231,7 @@ $$
 r_p = q\,\mathrm{AU}
 $$
 
-Mit Startabstand `$r_0=\|\mathbf r_0\|$` ergibt sich die Halbachse der
+Mit Startabstand $r_0=\|\mathbf r_0\|$ ergibt sich die Halbachse der
 Transferellipse:
 
 $$
@@ -282,11 +282,11 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| `$r_p=q\,\mathrm{AU}$` | `$q\le R_\odot/\mathrm{AU}$` | Perihel liegt in oder auf der Sonnenoberflaeche | `validate_mission_config()` lehnt Perihel innerhalb der Sonne ab. |
-| `$a_t=(r_0+r_p)/2$` | `$r_0+r_p\le0$` | Keine physikalische Ellipse | Durch positive Radien und Perihelvalidierung ausgeschlossen. |
-| Vis-Viva `$v=\sqrt{\mu_\odot(2/r-1/a_t)}$` | `$r\rightarrow0$` oder negativer Radikand | Singularitaet bzw. keine reale elliptische Geschwindigkeit | Perihelvalidierung und Sundiver-Geometrie halten `$r>R_\odot$`; bei ungueltiger Energie waere die Wurzel nicht real. |
-| Oberth-Burn `$\mathbf v^+=\mathbf v^-+\Delta v\,\mathbf v^-/\|\mathbf v^-\|$` | `$\|\mathbf v^-\|=0$` | Burn-Richtung undefiniert | In der Sundiver-Bahn tritt kein Ruhezustand auf; `_normalize()` schuetzt numerisch, ersetzt aber keine Missionsvalidierung. |
-| Solarfluss `$S=S_0(1\,\mathrm{AU}/r)^2$` | `$r\rightarrow0$` | Strahlungsfluss divergiert | Perihel ausserhalb der Sonne; Hitzeschildgrenze erzeugt Warnung bei Ueberschreitung. |
+| $r_p=q\,\mathrm{AU}$ | $q\le R_\odot/\mathrm{AU}$ | Perihel liegt in oder auf der Sonnenoberflaeche | `validate_mission_config()` lehnt Perihel innerhalb der Sonne ab. |
+| $a_t=(r_0+r_p)/2$ | $r_0+r_p\le0$ | Keine physikalische Ellipse | Durch positive Radien und Perihelvalidierung ausgeschlossen. |
+| Vis-Viva $v=\sqrt{\mu_\odot(2/r-1/a_t)}$ | $r\rightarrow0$ oder negativer Radikand | Singularitaet bzw. keine reale elliptische Geschwindigkeit | Perihelvalidierung und Sundiver-Geometrie halten $r>R_\odot$; bei ungueltiger Energie waere die Wurzel nicht real. |
+| Oberth-Burn $\mathbf v^+=\mathbf v^-+\Delta v\,\mathbf v^-/\|\mathbf v^-\|$ | $\|\mathbf v^-\|=0$ | Burn-Richtung undefiniert | In der Sundiver-Bahn tritt kein Ruhezustand auf; `_normalize()` schuetzt numerisch, ersetzt aber keine Missionsvalidierung. |
+| Solarfluss $S=S_0(1\,\mathrm{AU}/r)^2$ | $r\rightarrow0$ | Strahlungsfluss divergiert | Perihel ausserhalb der Sonne; Hitzeschildgrenze erzeugt Warnung bei Ueberschreitung. |
 
 ## Impulsive Burns und Treibstoff
 
@@ -322,16 +322,16 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| `$\Delta v=I_{sp}g_0\ln(m_0/m_f)$` | `$I_{sp}\le0$` oder `$g_0=0$` | Kein physikalisch definierter Raketenantrieb | `KickStage` validiert positive spezifische Impulse. |
-| `$\ln(m_0/m_f)$` | `$m_f\le0$` oder `$m_0\le0$` | Logarithmus undefiniert; negative/Nullmasse unphysikalisch | Missionsmassen muessen positiv sein; Treibstoffverbrauch wird auf vorhandene Masse begrenzt. |
-| `$m_f=m_0\exp[-\Delta v/(I_{sp}g_0)]$` | `$\Delta v<0$` | Negative Burn-Anforderung waere ein Vorzeichen-/Modellfehler | Missionsvalidierung lehnt negatives Oberth-Delta-v ab. |
-| `$m_{\mathrm{prop}}=m_0-m_f$` | angeforderter Verbrauch groesser als Vorrat | Gewuenschtes Delta-v nicht erreichbar | Code begrenzt Verbrauch auf verfuegbaren Treibstoff und meldet nur erreichtes Delta-v. |
+| $\Delta v=I_{sp}g_0\ln(m_0/m_f)$ | $I_{sp}\le0$ oder $g_0=0$ | Kein physikalisch definierter Raketenantrieb | `KickStage` validiert positive spezifische Impulse. |
+| $\ln(m_0/m_f)$ | $m_f\le0$ oder $m_0\le0$ | Logarithmus undefiniert; negative/Nullmasse unphysikalisch | Missionsmassen muessen positiv sein; Treibstoffverbrauch wird auf vorhandene Masse begrenzt. |
+| $m_f=m_0\exp[-\Delta v/(I_{sp}g_0)]$ | $\Delta v<0$ | Negative Burn-Anforderung waere ein Vorzeichen-/Modellfehler | Missionsvalidierung lehnt negatives Oberth-Delta-v ab. |
+| $m_{\mathrm{prop}}=m_0-m_f$ | angeforderter Verbrauch groesser als Vorrat | Gewuenschtes Delta-v nicht erreichbar | Code begrenzt Verbrauch auf verfuegbaren Treibstoff und meldet nur erreichtes Delta-v. |
 
 ## Kontinuierliche Antriebe
 
 <img src="docs/assets/formulas/continuous-propulsion.svg" alt="Continuous propulsion formulas" width="760">
 
-Kontinuierliche Antriebsmodule liefern einen Schubvektor `$\mathbf F$` und
+Kontinuierliche Antriebsmodule liefern einen Schubvektor $\mathbf F$ und
 daraus eine Beschleunigung:
 
 $$
@@ -340,8 +340,8 @@ $$
 = \frac{F}{m}\,\hat{\mathbf d}
 $$
 
-Die Richtung `$\hat{\mathbf d}$` wird je nach Modul als prograd, retrograd,
-radial nach aussen oder radial nach innen aus `$\mathbf r$` und `$\mathbf v$`
+Die Richtung $\hat{\mathbf d}$ wird je nach Modul als prograd, retrograd,
+radial nach aussen oder radial nach innen aus $\mathbf r$ und $\mathbf v$
 gebildet.
 
 Solar Sail:
@@ -352,8 +352,8 @@ F_{\mathrm{SS}}
   \left(\frac{1\,\mathrm{AU}}{r}\right)^2
 $$
 
-Im Code ist `$p_0=9.08\cdot10^{-6}\,\mathrm{N\,m^{-2}}$`; `$A$` ist die
-Segelflaeche und `$C_R$` der Reflexionsfaktor.
+Im Code ist $p_0=9.08\cdot10^{-6}\,\mathrm{N\,m^{-2}}$; $A$ ist die
+Segelflaeche und $C_R$ der Reflexionsfaktor.
 
 Electric Sail:
 
@@ -365,8 +365,8 @@ F_{\mathrm{ES}}
 \frac{\eta_{\mathrm{sw}}}{\max(r/\mathrm{AU},0.1)}
 $$
 
-Dabei bezeichnet `$N$` die Tetheranzahl, `$L$` die Tetherlaenge in Kilometern,
-`$U$` die Tetherspannung und `$\eta_{\mathrm{sw}}$` den Solarwind-Faktor.
+Dabei bezeichnet $N$ die Tetheranzahl, $L$ die Tetherlaenge in Kilometern,
+$U$ die Tetherspannung und $\eta_{\mathrm{sw}}$ den Solarwind-Faktor.
 
 Elektrische Triebwerke verbrauchen Treibstoff ueber:
 
@@ -381,11 +381,11 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| `$\mathbf a_{\mathrm{prop}}=\mathbf F/m$` | `$m\rightarrow0$` | Beschleunigung divergiert | `_thrust_result()` verwendet eine minimale Ersatzmasse; Missionskonfiguration fordert positive Massen. |
-| Richtung `$\hat{\mathbf d}$` | `$\|\mathbf r\|=0$` oder `$\|\mathbf v\|=0$` | Radiale/prograde Richtung undefiniert | `_normalize()` verhindert numerische Division durch null; physikalisch muss die Mission solche Zustaende vermeiden. |
-| Solar Sail `$F_{\mathrm{SS}}\propto1/r^2$` | `$r\rightarrow0$` | Schub und thermische Last divergieren | Im Code wird fuer den Nenner mindestens `0.01` AU verwendet; zusaetzlich thermische Warnung ueber `thermalLimitWm2`. |
-| Electric Sail `$F_{\mathrm{ES}}\propto1/\max(r/\mathrm{AU},0.1)$` | `$r\rightarrow0$` | Modell waere nahe der Sonne unbeschraenkt | Der Nenner ist explizit auf `0.1` begrenzt; das ist eine Modellklammer, keine reale Nahsonnenphysik. |
-| `$\dot m=F/(I_{sp}g_0)$` | `$I_{sp}\le0$` | Massenstrom undefiniert | Elektrische/thermische Module verwenden positive Standardwerte; ohne gueltigen `Isp` wird kein Treibstoffmodell angewendet. |
+| $\mathbf a_{\mathrm{prop}}=\mathbf F/m$ | $m\rightarrow0$ | Beschleunigung divergiert | `_thrust_result()` verwendet eine minimale Ersatzmasse; Missionskonfiguration fordert positive Massen. |
+| Richtung $\hat{\mathbf d}$ | $\|\mathbf r\|=0$ oder $\|\mathbf v\|=0$ | Radiale/prograde Richtung undefiniert | `_normalize()` verhindert numerische Division durch null; physikalisch muss die Mission solche Zustaende vermeiden. |
+| Solar Sail $F_{\mathrm{SS}}\propto1/r^2$ | $r\rightarrow0$ | Schub und thermische Last divergieren | Im Code wird fuer den Nenner mindestens `0.01` AU verwendet; zusaetzlich thermische Warnung ueber `thermalLimitWm2`. |
+| Electric Sail $F_{\mathrm{ES}}\propto1/\max(r/\mathrm{AU},0.1)$ | $r\rightarrow0$ | Modell waere nahe der Sonne unbeschraenkt | Der Nenner ist explizit auf `0.1` begrenzt; das ist eine Modellklammer, keine reale Nahsonnenphysik. |
+| $\dot m=F/(I_{sp}g_0)$ | $I_{sp}\le0$ | Massenstrom undefiniert | Elektrische/thermische Module verwenden positive Standardwerte; ohne gueltigen `Isp` wird kein Treibstoffmodell angewendet. |
 
 ## Lambert-Transfer
 
@@ -512,13 +512,13 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| `$c=(\mathbf r_1\cdot\mathbf r_2)/(\|\mathbf r_1\|\|\mathbf r_2\|)$` | `$\|\mathbf r_1\|=0$` oder `$\|\mathbf r_2\|=0$` | Winkel zwischen Randvektoren undefiniert | Randpunkte muessen reale heliozentrische Positionen sein; Sonnenzentrum ist kein gueltiger Wegpunkt. |
-| `$A=\sigma\sqrt{\|\mathbf r_1\|\|\mathbf r_2\|(1+c)/(1-c)}$` | `$c\rightarrow1$` | Start- und Zielrichtung nahezu kollinear; Nenner `$(1-c)$` verschwindet | `_lambert_candidates()` bricht bei nahezu kollinearer Lambert-Geometrie mit Fehler ab. |
-| `$C(z),S(z)$` | `$z\rightarrow0$` | Standardform haette `0/0`; Grenzwerte sind endlich | Code setzt die analytischen Grenzwerte `$C(0)=1/2$`, `$S(0)=1/6$`. |
-| `$y(z)$` | `$C(z)\le0$` oder `$y\le0$` | Quadratwurzel bzw. Transfergeometrie ungueltig | Kandidat wird verworfen, bis ein gueltiges Intervall gefunden wird. |
+| $c=(\mathbf r_1\cdot\mathbf r_2)/(\|\mathbf r_1\|\|\mathbf r_2\|)$ | $\|\mathbf r_1\|=0$ oder $\|\mathbf r_2\|=0$ | Winkel zwischen Randvektoren undefiniert | Randpunkte muessen reale heliozentrische Positionen sein; Sonnenzentrum ist kein gueltiger Wegpunkt. |
+| $A=\sigma\sqrt{\|\mathbf r_1\|\|\mathbf r_2\|(1+c)/(1-c)}$ | $c\rightarrow1$ | Start- und Zielrichtung nahezu kollinear; Nenner $(1-c)$ verschwindet | `_lambert_candidates()` bricht bei nahezu kollinearer Lambert-Geometrie mit Fehler ab. |
+| $C(z),S(z)$ | $z\rightarrow0$ | Standardform haette `0/0`; Grenzwerte sind endlich | Code setzt die analytischen Grenzwerte $C(0)=1/2$, $S(0)=1/6$. |
+| $y(z)$ | $C(z)\le0$ oder $y\le0$ | Quadratwurzel bzw. Transfergeometrie ungueltig | Kandidat wird verworfen, bis ein gueltiges Intervall gefunden wird. |
 | Zeitgleichung | Keine Nullstelle in Suchintervall | Fuer Datum/Flugzeit existiert kein akzeptierter Transferzweig | Code sucht Brackets numerisch; ohne Bracket wird keine Lambert-Loesung gemeldet. |
-| `$g=A\sqrt{y/\mu_\odot}$` | `$g\rightarrow0$` | Geschwindigkeit aus Lagrange-Koeffizienten divergiert | Kandidat wird verworfen, wenn `g` numerisch zu klein ist. |
-| `$\Delta v_{\mathrm{inj}}=\|\mathbf v_1-\mathbf v_{\mathrm{ref}}\|$` | keine Singularitaet, aber sehr gross moeglich | Energetisch unplausibler oder nicht realisierbarer Transfer | Optimierung waehlt kleinsten Kandidaten; Budgetpruefung erfolgt in Audit/Validierung. |
+| $g=A\sqrt{y/\mu_\odot}$ | $g\rightarrow0$ | Geschwindigkeit aus Lagrange-Koeffizienten divergiert | Kandidat wird verworfen, wenn `g` numerisch zu klein ist. |
+| $\Delta v_{\mathrm{inj}}=\|\mathbf v_1-\mathbf v_{\mathrm{ref}}\|$ | keine Singularitaet, aber sehr gross moeglich | Energetisch unplausibler oder nicht realisierbarer Transfer | Optimierung waehlt kleinsten Kandidaten; Budgetpruefung erfolgt in Audit/Validierung. |
 
 ## Patched Conics und Swing-by
 
@@ -629,14 +629,14 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| `$r_{\mathrm{SOI}}=a_p(m_p/M_\odot)^{2/5}$` | `$a_p\le0$`, `$m_p\le0$` oder `$M_\odot\le0$` | Einflusssphaere nicht physikalisch definiert | Planetendaten enthalten positive Massen und Halbachsen; keine freie Nutzereingabe fuer diese Werte. |
-| `$\mathbf v_\infty^-=\mathbf v_{\mathrm{arr}}-\mathbf v_p$` | `$v_\infty\rightarrow0$` | Kein hyperbolischer Vorbeiflug; Grenzfall zum Einfang oder koorbitalen Flug | Swing-by-Formeln mit `$1/v_\infty^2$` sind dann ungueltig; solche Kandidaten muessen verworfen oder separat behandelt werden. |
-| `$\delta_{\max}=2\arcsin(1/(1+r_{p,\min}v_\infty^2/\mu_p))$` | `$\mu_p\le0$` oder `$v_\infty\rightarrow0$` | Argument geht gegen 1; Ablenkung gegen `$\pi$`, Hyperbelmodell degeneriert | Planeten-`$\mu_p$` ist positiv; sehr kleine `$v_\infty$` sind numerisch kritisch. |
-| `$r_p=\mu_p/v_\infty^2(1/\sin(\delta/2)-1)$` | `$v_\infty=0$` | Division durch null | Nur fuer hyperbolische Ueberschussgeschwindigkeiten gueltig. |
-| `$1/\sin(\delta/2)$` | `$\delta\rightarrow0$` | Perizentrum geht gegen unendlich; kein wirksamer Fly-by | Kleine Ablenkungen sind mathematisch gueltig, aber praktisch wirkungsarm; der Turn-Winkel wird im Audit sichtbar. |
-| `$\delta\rightarrow\delta_{\max}$` | Perizentrum erreicht Mindesthoehe | Kollisions-/Atmosphaerenrand | Code prueft Planetenradius, Mindesthoehe und Kollisionsreserve. |
-| `$y(H)=a_h\sqrt{e_h^2-1}\sinh H$` | `$e_h\le1$` | Keine Hyperbel; elliptischer oder parabolischer Grenzfall | Hyperbelabschnitt ist nur fuer `$e_h>1$` gueltig. |
-| `$t(H)=\sqrt{a_h^3/\mu_p}(e_h\sinh H-H)$` | `$\mu_p\le0$` oder nicht reeller Wurzelausdruck | Zeitparametrisierung ungueltig | Planetare `$\mu_p$` ist positiv; `$a_h$` wird als positiver Hyperbel-Skalenparameter dokumentiert. |
+| $r_{\mathrm{SOI}}=a_p(m_p/M_\odot)^{2/5}$ | $a_p\le0$, $m_p\le0$ oder $M_\odot\le0$ | Einflusssphaere nicht physikalisch definiert | Planetendaten enthalten positive Massen und Halbachsen; keine freie Nutzereingabe fuer diese Werte. |
+| $\mathbf v_\infty^-=\mathbf v_{\mathrm{arr}}-\mathbf v_p$ | $v_\infty\rightarrow0$ | Kein hyperbolischer Vorbeiflug; Grenzfall zum Einfang oder koorbitalen Flug | Swing-by-Formeln mit $1/v_\infty^2$ sind dann ungueltig; solche Kandidaten muessen verworfen oder separat behandelt werden. |
+| $\delta_{\max}=2\arcsin(1/(1+r_{p,\min}v_\infty^2/\mu_p))$ | $\mu_p\le0$ oder $v_\infty\rightarrow0$ | Argument geht gegen 1; Ablenkung gegen $\pi$, Hyperbelmodell degeneriert | Planeten-$\mu_p$ ist positiv; sehr kleine $v_\infty$ sind numerisch kritisch. |
+| $r_p=\mu_p/v_\infty^2(1/\sin(\delta/2)-1)$ | $v_\infty=0$ | Division durch null | Nur fuer hyperbolische Ueberschussgeschwindigkeiten gueltig. |
+| $1/\sin(\delta/2)$ | $\delta\rightarrow0$ | Perizentrum geht gegen unendlich; kein wirksamer Fly-by | Kleine Ablenkungen sind mathematisch gueltig, aber praktisch wirkungsarm; der Turn-Winkel wird im Audit sichtbar. |
+| $\delta\rightarrow\delta_{\max}$ | Perizentrum erreicht Mindesthoehe | Kollisions-/Atmosphaerenrand | Code prueft Planetenradius, Mindesthoehe und Kollisionsreserve. |
+| $y(H)=a_h\sqrt{e_h^2-1}\sinh H$ | $e_h\le1$ | Keine Hyperbel; elliptischer oder parabolischer Grenzfall | Hyperbelabschnitt ist nur fuer $e_h>1$ gueltig. |
+| $t(H)=\sqrt{a_h^3/\mu_p}(e_h\sinh H-H)$ | $\mu_p\le0$ oder nicht reeller Wurzelausdruck | Zeitparametrisierung ungueltig | Planetare $\mu_p$ ist positiv; $a_h$ wird als positiver Hyperbel-Skalenparameter dokumentiert. |
 
 ## Zielasymptote
 
@@ -669,10 +669,10 @@ $$
 -\frac{\mathbf r}{\|\mathbf r\|}
 $$
 
-Fuer `$\|\mathbf e\|>1$` liegt eine solare Fluchthyperbel vor. Mit
-Periapsisrichtung `$\hat{\mathbf p}=\mathbf e/\|\mathbf e\|$`,
-Bahnnormale `$\hat{\mathbf h}=\mathbf h/\|\mathbf h\|$` und
-Transversalrichtung `$\hat{\mathbf q}=\hat{\mathbf h}\times\hat{\mathbf p}$`
+Fuer $\|\mathbf e\|>1$ liegt eine solare Fluchthyperbel vor. Mit
+Periapsisrichtung $\hat{\mathbf p}=\mathbf e/\|\mathbf e\|$,
+Bahnnormale $\hat{\mathbf h}=\mathbf h/\|\mathbf h\|$ und
+Transversalrichtung $\hat{\mathbf q}=\hat{\mathbf h}\times\hat{\mathbf p}$
 ergibt sich die asymptotische wahre Anomalie:
 
 $$
@@ -690,7 +690,7 @@ $$
 +\hat{\mathbf q}\sin\nu_\infty
 $$
 
-Der Zielfehler zum normierten Zielvektor `$\hat{\mathbf t}$` wird als
+Der Zielfehler zum normierten Zielvektor $\hat{\mathbf t}$ wird als
 Winkelrest bewertet:
 
 $$
@@ -718,14 +718,14 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| `$\epsilon=\|\mathbf v\|^2/2-\mu_\odot/\|\mathbf r\|$` | `$\|\mathbf r\|\rightarrow0$` | Energie divergiert im Sonnenzentrum | Durch Perihelvalidierung ausgeschlossen; keine Zielasymptote im Sonnenzentrum. |
-| `$\mathbf h=\mathbf r\times\mathbf v$` | `$\|\mathbf h\|\rightarrow0$` | Rein radialer Flug; Bahnebene und Transversalrichtung undefiniert | `_solar_asymptote_direction()` gibt keine Asymptote zurueck, wenn der Drehimpuls zu klein ist. |
-| `$\mathbf e=(\mathbf v\times\mathbf h)/\mu_\odot-\mathbf r/\|\mathbf r\|$` | `$\mu_\odot=0$` oder `$\|\mathbf r\|=0$` | Exzentrizitaetsvektor undefiniert | Sonnen-`$\mu_\odot$` ist konstant positiv; `$r=0$` wird durch Missionsgrenzen vermieden. |
-| `$\hat{\mathbf p}=\mathbf e/\|\mathbf e\|$` | `$\|\mathbf e\|=0$` | Periapsisrichtung undefiniert | Bei kreisfoermigen oder degenerierten Bahnen keine Zielasymptote. |
-| `$\nu_\infty=\arccos(-1/\|\mathbf e\|)$` | `$\|\mathbf e\|\le1$` | Keine hyperbolische Fluchtasymptote | Code gibt nur fuer `$\|\mathbf e\|>1$` eine Asymptote zurueck. |
-| `$\hat{\mathbf s}_\infty=\hat{\mathbf p}\cos\nu_\infty+\hat{\mathbf q}\sin\nu_\infty$` | `$\|\mathbf h\|=0$` oder `$\|\mathbf e\|=0$` | Basisvektoren `$\hat{\mathbf p},\hat{\mathbf q}$` undefiniert | Asymptote wird nur berechnet, wenn Drehimpuls und Exzentrizitaet gueltig sind. |
-| `$\alpha=\arccos(\hat{\mathbf s}_\infty\cdot\hat{\mathbf t})$` | Skalarprodukt numerisch ausserhalb `[-1,1]` | Rundungsfehler macht `arccos` undefiniert | Code clamp't Winkelargumente auf `[-1,1]`. |
-| `$\Delta v_{\mathrm{target}}=\|\mathbf v_{\mathrm{target}}-\mathbf v_{\mathrm{gravity}}\|$` | keine mathematische Singularitaet | Kann beliebig gross werden, wenn Zielbedingung energetisch nicht passt | Wird als Sollanforderung ausgewiesen und gegen das konfigurierte Antriebsbudget geprueft. |
+| $\epsilon=\|\mathbf v\|^2/2-\mu_\odot/\|\mathbf r\|$ | $\|\mathbf r\|\rightarrow0$ | Energie divergiert im Sonnenzentrum | Durch Perihelvalidierung ausgeschlossen; keine Zielasymptote im Sonnenzentrum. |
+| $\mathbf h=\mathbf r\times\mathbf v$ | $\|\mathbf h\|\rightarrow0$ | Rein radialer Flug; Bahnebene und Transversalrichtung undefiniert | `_solar_asymptote_direction()` gibt keine Asymptote zurueck, wenn der Drehimpuls zu klein ist. |
+| $\mathbf e=(\mathbf v\times\mathbf h)/\mu_\odot-\mathbf r/\|\mathbf r\|$ | $\mu_\odot=0$ oder $\|\mathbf r\|=0$ | Exzentrizitaetsvektor undefiniert | Sonnen-$\mu_\odot$ ist konstant positiv; $r=0$ wird durch Missionsgrenzen vermieden. |
+| $\hat{\mathbf p}=\mathbf e/\|\mathbf e\|$ | $\|\mathbf e\|=0$ | Periapsisrichtung undefiniert | Bei kreisfoermigen oder degenerierten Bahnen keine Zielasymptote. |
+| $\nu_\infty=\arccos(-1/\|\mathbf e\|)$ | $\|\mathbf e\|\le1$ | Keine hyperbolische Fluchtasymptote | Code gibt nur fuer $\|\mathbf e\|>1$ eine Asymptote zurueck. |
+| $\hat{\mathbf s}_\infty=\hat{\mathbf p}\cos\nu_\infty+\hat{\mathbf q}\sin\nu_\infty$ | $\|\mathbf h\|=0$ oder $\|\mathbf e\|=0$ | Basisvektoren $\hat{\mathbf p},\hat{\mathbf q}$ undefiniert | Asymptote wird nur berechnet, wenn Drehimpuls und Exzentrizitaet gueltig sind. |
+| $\alpha=\arccos(\hat{\mathbf s}_\infty\cdot\hat{\mathbf t})$ | Skalarprodukt numerisch ausserhalb `[-1,1]` | Rundungsfehler macht `arccos` undefiniert | Code clamp't Winkelargumente auf `[-1,1]`. |
+| $\Delta v_{\mathrm{target}}=\|\mathbf v_{\mathrm{target}}-\mathbf v_{\mathrm{gravity}}\|$ | keine mathematische Singularitaet | Kann beliebig gross werden, wenn Zielbedingung energetisch nicht passt | Wird als Sollanforderung ausgewiesen und gegen das konfigurierte Antriebsbudget geprueft. |
 
 ## Architektur
 
