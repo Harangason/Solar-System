@@ -1,4 +1,5 @@
 import type { MissionConfig, MissionResult } from './types'
+import type { EntryCorridorDefinition } from './entryCorridorGeometry'
 import type { WaypointRouteResult } from './components/PlannedWaypointRoute'
 import type { DirectSolarRouteResult } from './components/DirectSolarRoute'
 
@@ -152,6 +153,7 @@ interface OptimizationRequest {
     role: 'entry' | 'periapsis' | 'exit' | 'periapsis_point'
     altitudeKm: number
   }
+  entryCorridor?: EntryCorridorDefinition
   targetRightAscensionDeg: number
   targetDeclinationDeg: number
   desiredSolarExitSpeedKmS: number

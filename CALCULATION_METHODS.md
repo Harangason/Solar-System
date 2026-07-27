@@ -18,6 +18,23 @@ Benachbarte Segmente müssen denselben kartesischen Grenzpunkt besitzen. Eine
 gewollte Geschwindigkeitsänderung wird als Manöver protokolliert und darf nicht
 als numerischer Restfehler verborgen werden.
 
+### Optionale simultane N-Körper-Validierung
+
+Das Segmentmodell erzeugt weiterhin schnell einen Referenzentwurf. Wenn
+`highFidelityNBody` aktiviert ist, wird dieser anschließend mit einem
+durchgängigen heliozentrischen Kraftmodell aus Sonne und allen acht Planeten
+validiert. An der planetaren SOI findet kein Kraftmodellwechsel statt. Der
+indirekte planetare Term kompensiert die Beschleunigung des heliozentrischen
+Ursprungs.
+
+Eine Least-Squares-Korrektur variiert die drei Komponenten der
+Abfluggeschwindigkeit, bis die Referenzposition am SOI-Eintritt bis auf
+`10 km` erreicht wird. Transfer, Nahbegegnung und Ausflug werden mit DOP853,
+`rtol=1e-11`, getrennten absoluten Positions- und
+Geschwindigkeitstoleranzen und maximal drei Tagen Schrittweite propagiert.
+Der Zustand bleibt über die SOI-Grenzen stetig; nur ein geplantes und im Audit
+ausgewiesenes Zielinjektionsmanöver darf ihn impulsiv ändern.
+
 ### Manueller Routenentwurf
 
 Der 3D-Routenentwurf kann zusätzliche Stützpunkte, Hilfslinien und
@@ -43,6 +60,11 @@ zwischen der physikalischen Berechnung und der Three.js-Darstellung vertauscht
 werden. Die Darstellung führt lediglich die Abbildung `(x,y,z) -> (x,z,y)` und
 die konfigurierten visuellen Skalierungen aus.
 
+Der Datensatz enthält außerdem den aktiven Ephemeridenmodus. Im SPICE-Modus
+werden Meta-Kernel, Frame, Beobachter, Aberrationskorrektur,
+SpiceyPy-Version und die für diesen Lauf tatsächlich aufgelösten
+Körper- beziehungsweise Baryzentrumsziele protokolliert.
+
 ## 3. Lambert-Abschnitt
 
 Für Startposition `r₁`, SOI-Eintrittsposition `r₂` und Flugzeit `Δt` löst die
@@ -59,6 +81,24 @@ benötigte Einspritzimpuls lautet
 
 `Δv_injection = ||v₁ - v_burn||`.
 
+### Flächiger SOI-Eintrittskorridor
+
+Ist `entryCorridor.enabled` gesetzt, ist `r₂` kein Planetenzentrum. Der
+Korridor wird durch eine planetenzentrierte Einheitsrichtung, zwei Halbwinkel
+und eine Drehung der lokalen Tangentialbasis beschrieben. Gnomonische
+Winkelkoordinaten `(u,v)` werden auf die SOI abgebildet:
+
+`d(u,v) = normalize(c + tan(u) e_right + tan(v) e_up)`,
+
+`r₂(u,v) = r_planet + r_SOI d(u,v)`.
+
+Die Planung bewertet Mittelpunkt, vier Kantenmitten und vier Ecken. Für jeden
+Punkt wird die Lambert-Randwertaufgabe gelöst; nicht lösbare Punkte werden
+verworfen. Unter den verbleibenden Kandidaten gewinnt das kleinste
+Einspritz-Δv relativ zum Solar-Oberth-Randzustand. Die lokale Hyperbelebene
+wird anschließend auf diese ausgewählte SOI-Eintrittsrichtung ausgerichtet.
+Soll-/Ist-Winkel und die Bereichsprüfung werden im Audit protokolliert.
+
 Die Lambert-Bahn wird anschließend mit der adaptiven DOP853-Integration und
 engen Positions-/Geschwindigkeitstoleranzen erneut propagiert. Ihr letzter
 Punkt wird exakt auf den ersten Punkt der SOI-Hyperbel gesetzt. Positions- und
@@ -67,6 +107,37 @@ erhalten. Damit kann eine fehlerhafte Darstellungsabtastung nicht mehr durch
 das nachträgliche Verbinden der Segmente verborgen werden.
 
 ## 4. Einflusssphäre und planetarer Relativzustand
+
+### Zustandskette aus 2D-Routenabschnitten
+
+Ist `routeSections` gesetzt, werden die Abschnitte nicht als getrennte
+Vorschauen berechnet. Jeder Eintrag liefert den räumlichen Zielkorridor für
+einen heliozentrischen Lambert-Abschnitt. Am SOI-Rand wird ein erforderlicher
+Korridoreinschuss als explizites Delta-v ausgewiesen. Innerhalb der
+Einflusssphäre propagiert DOP853 Sonnen- und Planetengravitation gleichzeitig
+bis zum sicheren Perizentrum und zum erneuten SOI-Austritt.
+
+Bei einem folgenden Abschnitt wird dessen Ziel bereits bei der Auslegung des
+aktuellen Fly-bys berücksichtigt. Der Solver variiert den B-Plane-Uhrwinkel und
+einen sicheren Perizentrumsradius oberhalb des Mindestabstands. Bewertet wird
+die passive heliozentrische Austrittsrichtung nach dem Gravity Assist gegenüber
+der Richtung zum nächsten Planeten beziehungsweise zur J2000-Asymptote eines
+interstellaren Ziels. Ein dafür am SOI-Eintritt nötiger Zielimpuls wird nicht
+verdeckt, sondern als `corridorInsertionDeltaVKmS` ausgewiesen und gegen den
+eingestellten Δv-Fächer geprüft.
+
+Der vollständige Austrittszustand `(r_exit, v_exit, t_exit)` ist der
+Referenzzustand des folgenden Lambert-Abschnitts. Positionen werden an keiner
+Abschnittsgrenze neu gesetzt. Erforderliche Geschwindigkeitsänderungen bleiben
+als Übergangs- oder Korridoreinschussimpuls sichtbar und werden gegen das
+konfigurierte Budget geprüft. Damit bleibt beispielsweise ein Eintritt über
+Jupiters Nordpol (`+z`) auch für den anschließenden Abschnitt Jupiter–Saturn
+eine echte dreidimensionale Randbedingung.
+
+Ist der letzte Abschnitt interstellar, wird er nicht als Lambert-Flug zum
+Sternzentrum missverstanden. Er ist eine richtungsgebundene ECLIPJ2000-
+Asymptote; zur Darstellung wird der am letzten Fly-by entstandene Zustand unter
+Sonnengravitation weiterpropagiert.
 
 Die Laplace-Einflusssphäre wird angenähert durch
 
@@ -165,6 +236,10 @@ Jeder Lauf protokolliert mindestens:
 - Zahl der Shooting-Iterationen,
 - Erfüllung des konfigurierten Δv-Limits.
 
+Bei aktivierter N-Körper-Validierung kommen Korrektur-Δv,
+SOI-Eintrittsrest, tatsächliche Perizentrumshöhe, Kollisionsstatus,
+Patched-Conic-Ausgangsrest und Integratortoleranzen hinzu.
+
 Eine Route darf nur dann als vollständig flugfähig gelten, wenn alle harten
 Invarianten erfüllt sind und sämtliche beabsichtigten Manöver innerhalb eines
 expliziten Antriebsbudgets liegen. Eine grüne Linie kennzeichnet den gewählten
@@ -172,10 +247,19 @@ Zielpfad, ersetzt aber nicht diese numerische Freigabe.
 
 ## 9. Bekannte Modellgrenzen
 
-- Patched Conics schaltet zwischen Sonnen- und Planetengravitation um; eine
-  hochgenaue Missionsauslegung benötigt simultane N-Körper-Integration.
-- Planetendaten und Ephemeriden sind für Visualisierung und Vorentwurf
-  vereinfacht und ersetzen keine SPICE-Kernel.
+- Patched Conics bleibt das schnelle Entwurfsmodell. Die optionale
+  N-Körper-Validierung integriert Sonnen- und Planetengravitation gleichzeitig
+  und schaltet an der SOI keinen Kraftterm um.
+- Die N-Körper-Validierung umfasst noch keine Monde, zonalen Harmonischen,
+  Relativistik, Strahlungsdruck, Atmosphäre, Manöverfehler oder
+  Ephemeridenunsicherheit. Sie ist deshalb keine missionskritische
+  Navigationsfreigabe.
+- Bei aktivem SPICE-Backend stammen die geometrischen heliozentrischen
+  Planetenpositionen und -geschwindigkeiten aus den geladenen SPKs. Ohne
+  lokalen Meta-Kernel wird im Modus `auto` auf vereinfachte J2000-Elemente
+  zurückgefallen. Die Kernelabdeckung und bei äußeren Planeten die
+  Unterscheidung zwischen Körperzentrum und Systembaryzentrum müssen für eine
+  konkrete Mission geprüft werden.
 - Die globale Ansicht bleibt vollständig heliocentrisch und unvergrößert. Der
   separate Flyby-Fokus ist planetenzentriert und linear skaliert. Die Modi
   „SOI gesamt“ und „Perizentrum“ verwenden unterschiedliche, jeweils intern

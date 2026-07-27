@@ -1,25 +1,43 @@
 import { GizmoHelper, GizmoViewport, Grid, PerformanceMonitor, Stars } from '@react-three/drei'
 import { Canvas, type RootState } from '@react-three/fiber'
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import * as THREE from 'three'
 
 import { INTERSTELLAR_TARGETS } from '../interstellarTargets'
 import { interstellarTargetPosition } from '../celestialCoordinates'
+import { withCorridorFeasibility, type CorridorTargetPhysics } from '../corridorFeasibility'
+import { DEFAULT_ENTRY_CORRIDOR, type EntryCorridorDefinition } from '../entryCorridorGeometry'
 import { requestLaunchOptimization, type LaunchOptimizationResult } from '../launchOptimizer'
-import { DEFAULT_MISSION_CONFIG, requestMissionSimulation } from '../missionSimulation'
+import { DEFAULT_MISSION_CONFIG, requestMissionSimulation, validateMissionConfig } from '../missionSimulation'
 import { planetPositionAt } from '../orbitalMath'
+import type { RouteSectionDefinition } from '../routeSections'
 import { popSketchHistory, removeSketchSelection } from '../routeSketchState'
 import type { MissionConfig, MissionResult, MoonCatalogue, MoonData, PlanetData, SolarSystemData, VisualConfig } from '../types'
 import { MissionTrajectory } from './MissionTrajectory'
 import { DirectSolarRoute, type DirectSolarRouteResult } from './DirectSolarRoute'
 import { DraggableOverlayPanel } from './DraggableOverlayPanel'
+import { EntryCorridorEditor } from './EntryCorridorEditor'
+import { EntryCorridorMarker } from './EntryCorridorMarker'
 import { FlybyFocusInset } from './FlybyFocusInset'
 import { InterstellarTargets } from './InterstellarTargets'
 import { MilkyWayBackground } from './MilkyWayBackground'
 import { MoonSystem } from './MoonSystem'
 import { Orbit } from './Orbit'
 import { ParameterPanel } from './ParameterPanel'
-import { PlanetCameraControls, type CameraFocusRequest } from './PlanetCameraControls'
+import {
+  PlanetCameraControls,
+  type CameraFocusRequest,
+  type FocusedCameraView,
+} from './PlanetCameraControls'
 import { PlannedWaypointRoute, type WaypointRouteResult } from './PlannedWaypointRoute'
 import { PlanetMesh } from './PlanetMesh'
 import { createRouteSketch, RoutePlanPreview, type RouteDrawTool, type RouteSketch, type RouteSketchSelection, type RouteTransformMode } from './RoutePlanPreview'
@@ -85,7 +103,27 @@ function formatMissionDate(isoDate: string) {
   return new Date(`${isoDate}T00:00:00Z`).toLocaleDateString('de-DE', { timeZone: 'UTC' })
 }
 
-export function ThreeDView() {
+interface ThreeDViewProps {
+  routeSections: RouteSectionDefinition[]
+  entryCorridor: EntryCorridorDefinition
+  onEntryCorridorChange: Dispatch<SetStateAction<EntryCorridorDefinition>>
+  waypointId: string
+  onWaypointChange: Dispatch<SetStateAction<string>>
+  onPlannedMissionDateChange: Dispatch<SetStateAction<string | null>>
+  plannedRoute: WaypointRouteResult | null
+  onPlannedRouteChange: Dispatch<SetStateAction<WaypointRouteResult | null>>
+}
+
+export function ThreeDView({
+  routeSections,
+  entryCorridor,
+  onEntryCorridorChange,
+  waypointId,
+  onWaypointChange: setWaypointId,
+  onPlannedMissionDateChange: setPlannedMissionDate,
+  plannedRoute,
+  onPlannedRouteChange: setPlannedRoute,
+}: ThreeDViewProps) {
   const [data, setData] = useState<SolarSystemData | null>(null)
   const [moonCatalogue, setMoonCatalogue] = useState<MoonCatalogue | null>(null)
   const [selectedPlanet, setSelectedPlanet] = useState<PlanetData | null>(null)
@@ -102,17 +140,19 @@ export function ThreeDView() {
   const [stepDays, setStepDays] = useState(1)
   const [showMoons, setShowMoons] = useState(true)
   const [navigationMode, setNavigationMode] = useState<'rotate' | 'pan'>('rotate')
+  const [missionPlannerOpen, setMissionPlannerOpen] = useState(() => window.innerWidth >= 1_100)
+  const [parameterPanelOpen, setParameterPanelOpen] = useState(() => window.innerWidth >= 1_440)
   const [selectedTargetId, setSelectedTargetId] = useState('proxima-centauri')
-  const [waypointId, setWaypointId] = useState('jupiter')
   const [encounterDay, setEncounterDay] = useState(730)
   const [flybyAltitudeKm, setFlybyAltitudeKm] = useState(100_000)
   const [flybyMode, setFlybyMode] = useState<'acceleration' | 'observation'>('acceleration')
+  const [highFidelityNBody, setHighFidelityNBody] = useState(false)
+  const [entryCorridorEditorOpen, setEntryCorridorEditorOpen] = useState(false)
   const [aimpointEnabled, setAimpointEnabled] = useState(false)
   const [aimpointClockAngleDeg, setAimpointClockAngleDeg] = useState(0)
   const [aimpointScreenRadiusNorm, setAimpointScreenRadiusNorm] = useState(1)
   const [aimpointAltitudeKm, setAimpointAltitudeKm] = useState(100_000)
   const [aimpointRole, setAimpointRole] = useState<AimpointRole>('periapsis')
-  const [plannedRoute, setPlannedRoute] = useState<WaypointRouteResult | null>(null)
   const [routeError, setRouteError] = useState<string | null>(null)
   const [routeLoading, setRouteLoading] = useState(false)
   const [optimizationWindowDays, setOptimizationWindowDays] = useState(1_460)
@@ -143,6 +183,24 @@ export function ThreeDView() {
   const [rendererProfile, setRendererProfile] = useState<'stabil' | 'sparsam'>('stabil')
   const [activeInfoDrags, setActiveInfoDrags] = useState<Set<string>>(() => new Set())
   const [cameraFocusRequest, setCameraFocusRequest] = useState<CameraFocusRequest>({ kind: 'overview', view: 'perspective', requestId: 0 })
+  const validationErrors = validateMissionConfig(draft)
+  const setEntryCorridor: Dispatch<SetStateAction<EntryCorridorDefinition>> = useCallback((action) => {
+    onEntryCorridorChange((current) => {
+      const next = typeof action === 'function' ? action(current) : action
+      const target = waypointId === 'sun'
+        ? data?.sun
+        : data?.planets.find((planet) => planet.id === waypointId)
+      const targetPhysics: CorridorTargetPhysics = {
+        radiusKm: target?.radiusKm,
+        surfaceGravity: target?.surfaceGravity,
+      }
+      return withCorridorFeasibility(next, targetPhysics)
+    })
+  }, [data, onEntryCorridorChange, waypointId])
+  const corridorBlocked = entryCorridor.enabled && Boolean(entryCorridor.blocked)
+  const corridorRequiresDynamicCheck = corridorBlocked && routeSections.length > 0
+  const corridorBlockMessage = entryCorridor.blockReasons?.join(' ')
+    || 'Der Zielkorridor verletzt den Mindestabstand oder liegt auf der vom Ursprung abgewandten Seite.'
 
   const handleInfoDragChange = useCallback((label: string, active: boolean) => {
     setActiveInfoDrags((current) => {
@@ -235,12 +293,13 @@ export function ThreeDView() {
 
   useEffect(() => clearPendingRouteSketch, [clearPendingRouteSketch])
 
+  const visibleMissionResult = routePlanStatus === 'hidden' ? result : null
   const playbackEndDay = plannedRoute?.totalFlightDays
     ?? plannedRoute?.trajectory.at(-1)?.elapsedDays
-    ?? result?.summary.totalFlightDays
+    ?? visibleMissionResult?.summary.totalFlightDays
     ?? 0
-  const canPlay = playbackEndDay > 0
-  const activeStartDate = plannedRoute?.startDate ?? result?.config.startDate ?? draft.startDate
+  const canPlay = playbackEndDay > 0 && routePlanStatus !== 'review'
+  const activeStartDate = plannedRoute?.startDate ?? visibleMissionResult?.config.startDate ?? draft.startDate
 
   useEffect(() => {
     const controller = new AbortController()
@@ -276,6 +335,15 @@ export function ThreeDView() {
   }, [canPlay, playbackEndDay, playing, simulationSpeed])
 
   useEffect(() => {
+    const adaptSidebarsToViewport = () => {
+      setMissionPlannerOpen(window.innerWidth >= 1_100)
+      setParameterPanelOpen(window.innerWidth >= 1_440)
+    }
+    window.addEventListener('resize', adaptSidebarsToViewport)
+    return () => window.removeEventListener('resize', adaptSidebarsToViewport)
+  }, [])
+
+  useEffect(() => {
     if (canPlay && elapsedDays >= playbackEndDay && playing) setPlaying(false)
   }, [canPlay, elapsedDays, playbackEndDay, playing])
 
@@ -285,7 +353,10 @@ export function ThreeDView() {
       : [],
     [moonCatalogue, selectedPlanet],
   )
-  const currentPoint = useMemo(() => result ? pointAtDay(result, elapsedDays) : null, [elapsedDays, result])
+  const currentPoint = useMemo(
+    () => visibleMissionResult ? pointAtDay(visibleMissionResult, elapsedDays) : null,
+    [elapsedDays, visibleMissionResult],
+  )
   const currentRouteSegment = useMemo(() => {
     if (!plannedRoute?.segments?.length) return null
     const currentIndex = plannedRoute.trajectory.reduce(
@@ -307,14 +378,19 @@ export function ThreeDView() {
     ? data?.planets.find((planet) => planet.id === cameraFocusRequest.planetId) ?? null
     : null
   const focusedPlanetPosition = useMemo(
-    () => focusedPlanet
-      ? planetPositionAt(focusedPlanet, timestampMs, visual.orbitScale, visual.inclinationScale)
-      : null,
-    [focusedPlanet, timestampMs, visual.inclinationScale, visual.orbitScale],
+    () => {
+      if (cameraFocusRequest.kind === 'point') return new THREE.Vector3(...cameraFocusRequest.position)
+      return focusedPlanet
+        ? planetPositionAt(focusedPlanet, timestampMs, visual.orbitScale, visual.inclinationScale)
+        : null
+    },
+    [cameraFocusRequest, focusedPlanet, timestampMs, visual.inclinationScale, visual.orbitScale],
   )
-  const focusedPlanetRadius = focusedPlanet && data
-    ? scaledRadius(focusedPlanet, data.sun.radiusKm, visual)
-    : 0.01
+  const focusedPlanetRadius = cameraFocusRequest.kind === 'point'
+    ? cameraFocusRequest.radius
+    : focusedPlanet && data
+      ? scaledRadius(focusedPlanet, data.sun.radiusKm, visual)
+      : 0.01
   const selectedTargetScenePosition = useMemo(() => {
     if (!selectedTarget) return undefined
     const cataloguePosition = interstellarTargetPosition(selectedTarget)
@@ -367,6 +443,7 @@ export function ThreeDView() {
 
   const invalidateRoutePlan = () => {
     clearPendingRouteSketch()
+    setEntryCorridorEditorOpen(false)
     setRoutePlanStatus('hidden')
     setRouteSketch(null)
     routeSketchRef.current = null
@@ -375,6 +452,7 @@ export function ThreeDView() {
     setRouteDrawTool('move')
     setRouteTransformMode('translate')
     setRouteSketchDragging(false)
+    setPlannedMissionDate(null)
   }
 
   const freshRouteSketch = () => routePlanNodes ? createRouteSketch(routePlanNodes) : null
@@ -389,11 +467,26 @@ export function ThreeDView() {
     setRouteDrawTool('move')
     setRouteTransformMode('translate')
     setRouteSketchDragging(false)
+    setEntryCorridorEditorOpen(false)
     setRoutePlanStatus('review')
     setPlannedRoute(null)
+    setPlannedMissionDate(null)
     setDirectSolarRoute(null)
     setOptimizationResult(null)
     setRouteError(null)
+  }
+  const activateRouteDrawing = () => {
+    setMissionPlannerOpen(true)
+    setPlaying(false)
+    setEntryCorridorEditorOpen(false)
+    if (!routeSketch || routePlanStatus === 'hidden') {
+      beginRouteReview()
+      return
+    }
+    setRoutePlanStatus('review')
+    setRouteSketchSelection(null)
+    setRouteDrawTool('move')
+    setRouteTransformMode('translate')
   }
   const resetRouteSketch = () => {
     const next = freshRouteSketch()
@@ -412,6 +505,7 @@ export function ThreeDView() {
     setRouteDrawTool('move')
     setRouteTransformMode('translate')
     setRouteSketchDragging(false)
+    setEntryCorridorEditorOpen(false)
   }
   const removeLastSketchElement = () => {
     const current = routeSketchRef.current
@@ -484,7 +578,10 @@ export function ThreeDView() {
     setSelectedObject(planet.id)
     setSelectedMoon(null)
     setCameraFocusRequest((current) => ({ kind: 'planet', planetId: planet.id, requestId: current.requestId + 1 }))
-    if (planet.id !== 'earth') {
+    // Inspecting or focusing another planet must never silently destroy an
+    // open drawing or an already calculated route. The waypoint changes only
+    // while no route workflow is active.
+    if (planet.id !== 'earth' && routePlanStatus === 'hidden' && !plannedRoute) {
       setWaypointId(planet.id)
       invalidateRoutePlan()
       setPlannedRoute(null)
@@ -498,6 +595,76 @@ export function ThreeDView() {
   }
   const showSystemOverview = (view: 'perspective' | 'top' | 'front' | 'side' = 'perspective') => {
     setCameraFocusRequest((current) => ({ kind: 'overview', view, requestId: current.requestId + 1 }))
+  }
+  const showCameraView = (view: FocusedCameraView) => {
+    if (cameraFocusRequest.kind === 'point') {
+      setCameraFocusRequest((current) => current.kind === 'point'
+        ? { ...current, view, preserveDistance: true, requestId: current.requestId + 1 }
+        : current)
+      return
+    }
+    if (
+      cameraFocusRequest.kind === 'planet'
+      && selectedPlanet
+      && cameraFocusRequest.planetId === selectedPlanet.id
+    ) {
+      setCameraFocusRequest((current) => ({
+        kind: 'planet',
+        planetId: selectedPlanet.id,
+        view,
+        preserveDistance: true,
+        requestId: current.requestId + 1,
+      }))
+      return
+    }
+    if (view !== 'sun-behind' && view !== 'cross-axis') showSystemOverview(view)
+  }
+  const focusRouteWaypoint = () => {
+    if (!routePlanNodes) return
+    setCameraFocusRequest((current) => ({
+      kind: 'point',
+      label: `${routePlanNodes.waypointName}-Begegnung`,
+      position: routePlanNodes.waypoint.toArray() as [number, number, number],
+      radius: Math.max(routePlanNodes.waypointRadius, 0.24),
+      requestId: current.requestId + 1,
+    }))
+  }
+  const refocusCurrentObject = () => {
+    if (cameraFocusRequest.kind === 'point') {
+      setCameraFocusRequest((current) => current.kind === 'point'
+        ? { ...current, preserveDistance: false, requestId: current.requestId + 1 }
+        : current)
+      return
+    }
+    focusSelectedPlanet()
+  }
+  const toggleEntryCorridorEditor = () => {
+    const opening = !entryCorridorEditorOpen
+    setEntryCorridorEditorOpen(opening)
+    if (!opening) return
+    setEntryCorridor((current) => ({ ...current, enabled: true }))
+    setAimpointEnabled(false)
+    setPlannedRoute(null)
+    setPlannedMissionDate(null)
+    focusRouteWaypoint()
+  }
+  const selectQuickObject = (objectId: string) => {
+    if (!objectId) return
+    const planet = data?.planets.find((candidate) => candidate.id === objectId)
+    if (planet) {
+      if (routePlanStatus === 'review' && planet.id === waypointId && routePlanNodes) {
+        setSelectedPlanet(planet)
+        setSelectedObject(planet.id)
+        setSelectedMoon(null)
+        focusRouteWaypoint()
+        return
+      }
+      selectPlanet(planet)
+      return
+    }
+    setSelectedObject(objectId)
+    setSelectedMoon(null)
+    if (objectId === 'sun') showSystemOverview('perspective')
   }
   const selectInterstellarTarget = (targetId: string) => {
     setSelectedTargetId(targetId)
@@ -513,6 +680,7 @@ export function ThreeDView() {
       setSimulationError(null)
       const nextResult = await requestMissionSimulation(draft)
       setResult(nextResult)
+      setPlannedMissionDate(nextResult.config.startDate)
       setElapsedDays(0)
       setPlaying(false)
       setSimulationError(null)
@@ -556,18 +724,24 @@ export function ThreeDView() {
           targetRightAscensionDeg: selectedTarget.rightAscensionDeg,
           targetDeclinationDeg: selectedTarget.declinationDeg,
           desiredSolarExitSpeedKmS,
+          highFidelityNBody,
           flybyAimpoint: aimpointPayload,
+          entryCorridor,
+          routeSections,
           routeSketch,
         }),
       })
       const payload = await response.json() as WaypointRouteResult | { error?: string }
       if (!response.ok || 'error' in payload) throw new Error('error' in payload ? payload.error : `HTTP ${response.status}`)
       setPlannedRoute(payload as WaypointRouteResult)
+      setPlannedMissionDate((payload as WaypointRouteResult).startDate)
+      setRoutePlanStatus('confirmed')
       setElapsedDays((payload as WaypointRouteResult).trajectory[0]?.elapsedDays ?? 0)
       setPlaying(false)
       setSelectedObject('probe')
     } catch (error) {
       setPlannedRoute(null)
+      setPlannedMissionDate(null)
       setRoutePlanStatus('review')
       setRouteDrawTool('move')
       setRouteError(error instanceof Error ? error.message : 'Routenberechnung fehlgeschlagen.')
@@ -594,6 +768,7 @@ export function ThreeDView() {
         flybyAltitudeKm,
         flybyMode,
         flybyAimpoint: aimpointPayload,
+        entryCorridor,
         targetRightAscensionDeg: selectedTarget.rightAscensionDeg,
         targetDeclinationDeg: selectedTarget.declinationDeg,
         desiredSolarExitSpeedKmS,
@@ -616,6 +791,7 @@ export function ThreeDView() {
       // and mission context must also drive the moving planets and HUD.
       setResult(optimized.mission)
       setPlannedRoute(optimized.route)
+      setPlannedMissionDate(optimized.optimizedStartDate)
       setDirectSolarRoute(optimized.alternatives.directSolar.route)
       setElapsedDays(0)
       setPlaying(false)
@@ -639,6 +815,7 @@ export function ThreeDView() {
     flybyAltitudeKm,
     flybyMode,
     optimizationStartDate,
+    entryCorridor,
     aimpointClockAngleDeg,
     aimpointEnabled,
     aimpointRole,
@@ -670,16 +847,60 @@ export function ThreeDView() {
     setRouteDrawTool('move')
     setRouteTransformMode('translate')
     setRouteSketchDragging(false)
+    setEntryCorridor(DEFAULT_ENTRY_CORRIDOR)
+    setEntryCorridorEditorOpen(false)
     setElapsedDays(0)
     setPlaying(false)
     setSimulationError(null)
+  }
+  const saveSimulationPreset = () => {
+    localStorage.setItem('solar-oberth-preset', JSON.stringify({ draft, visual }))
+  }
+  const loadSimulationPreset = () => {
+    const stored = localStorage.getItem('solar-oberth-preset')
+    if (!stored) return
+    const preset = JSON.parse(stored) as { draft: MissionConfig; visual: VisualConfig }
+    setDraft(preset.draft)
+    setVisual(preset.visual)
+    setOptimizationStartDate(preset.draft.startDate)
+    invalidateRoutePlan()
+    setResult(null)
+    setPlannedRoute(null)
+    setPlannedMissionDate(null)
+    setDirectSolarRoute(null)
+    setOptimizationResult(null)
+    setElapsedDays(0)
+    setPlaying(false)
   }
 
   if (loadError) return <p className="status-message">3D-Daten konnten nicht geladen werden: {loadError}</p>
   if (!data || !moonCatalogue) return <p className="status-message">Planeten- und Monddaten werden geladen …</p>
 
   return (
-    <section className="three-d-layout mission-layout" aria-label="Interaktives Planeten- und Missionsmodell">
+    <section
+      className={`three-d-layout mission-layout ${missionPlannerOpen ? 'planner-open' : 'planner-collapsed'} ${parameterPanelOpen ? 'parameters-open' : 'parameters-collapsed'} ${routePlanStatus === 'review' ? 'drawing-active' : ''}`}
+      aria-label="Interaktives Planeten- und Missionsmodell"
+    >
+      <button
+        className="sidebar-toggle sidebar-toggle-left"
+        type="button"
+        aria-label={missionPlannerOpen ? 'Missionsplanung einklappen' : 'Missionsplanung ausklappen'}
+        aria-expanded={missionPlannerOpen}
+        title={missionPlannerOpen ? 'Missionsplanung einklappen' : 'Missionsplanung ausklappen'}
+        onClick={() => setMissionPlannerOpen((open) => !open)}
+      >
+        <span aria-hidden="true">{missionPlannerOpen ? '‹' : '›'}</span>
+      </button>
+      <button
+        className="sidebar-toggle sidebar-toggle-right"
+        type="button"
+        aria-label={parameterPanelOpen ? 'Objektdaten und Simulation einklappen' : 'Objektdaten und Simulation ausklappen'}
+        aria-expanded={parameterPanelOpen}
+        title={parameterPanelOpen ? 'Objektdaten und Simulation einklappen' : 'Objektdaten und Simulation ausklappen'}
+        onClick={() => setParameterPanelOpen((open) => !open)}
+      >
+        <span aria-hidden="true">{parameterPanelOpen ? '›' : '‹'}</span>
+      </button>
       <div className={`scene-wrap navigation-${navigationMode}`}>
         <Canvas
           camera={WEBGL_CAMERA}
@@ -718,19 +939,27 @@ export function ThreeDView() {
             hideGuide={Boolean(routePlanStatus !== 'hidden' || (showRouteGuide && (plannedRoute || directSolarRoute)))}
             onInfoDragChange={handleInfoDragChange}
           />
-          {routePlanStatus !== 'hidden' && !plannedRoute && routePlanNodes && routeSketch && (
+          {routePlanStatus === 'review' && routePlanNodes && routeSketch && (
             <RoutePlanPreview
               {...routePlanNodes}
               requestedPlan={requestedPlanNodes}
-              confirmed={routePlanStatus === 'confirmed'}
+              confirmed={false}
               sketch={routeSketch}
               drawTool={routeDrawTool}
               transformMode={routeTransformMode}
               selection={routeSketchSelection}
-              editable={routePlanStatus === 'review'}
+              editable
+              onFocusWaypoint={focusRouteWaypoint}
               onSketchChange={handleRouteSketchChange}
               onSelectionChange={setRouteSketchSelection}
               onEditingChange={handleRouteSketchEditingChange}
+            />
+          )}
+          {entryCorridor.enabled && routePlanNodes && (routePlanStatus === 'review' || plannedRoute) && (
+            <EntryCorridorMarker
+              position={routePlanNodes.waypoint}
+              radius={Math.max(routePlanNodes.waypointRadius * 1.55, 0.62)}
+              definition={entryCorridor}
             />
           )}
           {data.planets.map((planet) => {
@@ -738,7 +967,7 @@ export function ThreeDView() {
             return (
               <group key={planet.id}>
                 {visual.showOrbits && <Orbit planet={planet} distanceScale={visual.orbitScale} inclinationScale={visual.inclinationScale} />}
-                {visual.showPlanets && (
+                {visual.showPlanets && !(routePlanStatus === 'review' && planet.id === waypointId) && (
                   <Suspense fallback={null}>
                     <PlanetMesh
                       planet={planet}
@@ -766,8 +995,8 @@ export function ThreeDView() {
               </group>
             )
           })}
-          {result && !plannedRoute && <MissionTrajectory result={result} elapsedDays={elapsedDays} visual={visual} />}
-          {plannedRoute && <PlannedWaypointRoute route={plannedRoute} orbitScale={visual.orbitScale} inclinationScale={visual.inclinationScale} elapsedDays={elapsedDays} showDispersion={showRouteDispersion} dispersionWidth={dispersionWidth} showNavigationGuide={showRouteGuide} encounterBodyRadius={encounterPlanetRadius} probeScale={visual.probeScale} targetPosition={selectedTargetScenePosition} onInfoDragChange={handleInfoDragChange} />}
+          {visibleMissionResult && !plannedRoute && <MissionTrajectory result={visibleMissionResult} elapsedDays={elapsedDays} visual={visual} />}
+          {plannedRoute && routePlanStatus !== 'review' && <PlannedWaypointRoute route={plannedRoute} orbitScale={visual.orbitScale} inclinationScale={visual.inclinationScale} elapsedDays={elapsedDays} showDispersion={showRouteDispersion} dispersionWidth={dispersionWidth} showNavigationGuide={showRouteGuide} encounterBodyRadius={encounterPlanetRadius} probeScale={visual.probeScale} targetPosition={selectedTargetScenePosition} onInfoDragChange={handleInfoDragChange} />}
           {showAlternativeRoutes && directSolarRoute && <DirectSolarRoute route={directSolarRoute} orbitScale={visual.orbitScale} inclinationScale={visual.inclinationScale} showNavigationGuide={showRouteGuide && routePlanStatus === 'hidden'} targetPosition={selectedTargetScenePosition} onInfoDragChange={handleInfoDragChange} />}
           <PlanetCameraControls
             request={cameraFocusRequest}
@@ -781,7 +1010,20 @@ export function ThreeDView() {
           </GizmoHelper>
         </Canvas>
 
-        {plannedRoute && <FlybyFocusInset route={plannedRoute} elapsedDays={elapsedDays} />}
+        {plannedRoute && routePlanStatus !== 'review' && <FlybyFocusInset route={plannedRoute} elapsedDays={elapsedDays} />}
+        {entryCorridorEditorOpen && routePlanNodes && (
+          <EntryCorridorEditor
+            waypointName={routePlanNodes.waypointName}
+            waypointColor={routePlanNodes.waypointColor}
+            definition={entryCorridor}
+            onChange={(definition) => {
+              setEntryCorridor(definition)
+              setPlannedRoute(null)
+              setPlannedMissionDate(null)
+            }}
+            onClose={() => setEntryCorridorEditorOpen(false)}
+          />
+        )}
 
         <div className="webgl-renderer-status" aria-live="polite" title={rendererInfo ? `Maximale Texturgröße ${rendererInfo.maxTextureSize}px` : 'Renderer wird initialisiert'}>
           <span aria-hidden="true" />
@@ -790,14 +1032,18 @@ export function ThreeDView() {
         </div>
 
         <div className="mission-hud">
-          {plannedRoute ? <>
+          {routePlanStatus === 'review' ? <>
+            <span className="mission-status warning">ENTWURF</span>
+            <strong>Zeichenmodus aktiv</strong>
+            <span>Werkzeug oben wählen · Entwurf bleibt erhalten</span>
+          </> : plannedRoute ? <>
             <span className={`mission-status ${plannedRoute.summary.solarDepartureInjectionApplied ? 'success' : 'warning'}`}>{plannedRoute.summary.solarDepartureInjectionApplied ? 'ROUTE' : 'SOLLROUTE'}</span>
             <strong>{currentRouteSegment?.label ?? 'Wegpunktroute'}</strong>
             <span>Tag {elapsedDays.toFixed(1)} / {playbackEndDay.toFixed(0)}</span>
-          </> : result && currentPoint ? <>
-            <span className={`mission-status ${result.summary.status.toLowerCase()}`}>{result.summary.status}</span>
+          </> : visibleMissionResult && currentPoint ? <>
+            <span className={`mission-status ${visibleMissionResult.summary.status.toLowerCase()}`}>{visibleMissionResult.summary.status}</span>
             <strong>{currentPoint.phase.replaceAll('_', ' ')}</strong>
-            <span>Tag {elapsedDays.toFixed(1)} / {result.summary.totalFlightDays.toFixed(0)}</span>
+            <span>Tag {elapsedDays.toFixed(1)} / {visibleMissionResult.summary.totalFlightDays.toFixed(0)}</span>
           </> : <>
             <span className="mission-status">BEREIT</span>
             <strong>Noch keine Satellitenbahn berechnet</strong>
@@ -805,9 +1051,82 @@ export function ThreeDView() {
           </>}
         </div>
         <div className="time-controls" role="group" aria-label="Schnellsteuerung">
-          <button className={playing ? 'active' : ''} type="button" disabled={!canPlay} onClick={() => setPlaying((active) => !active)}>{playing ? 'Pause' : 'Mission abspielen'}</button>
-          <button className={showMoons ? 'active' : ''} type="button" aria-pressed={showMoons} onClick={() => setShowMoons((visible) => !visible)}>Monde · {showMoons ? 'an' : 'aus'}</button>
-          <button type="button" disabled={!canPlay} onClick={() => setSelectedObject('probe')}>Sonde</button>
+          <label className="quick-object-search">
+            <span>Objekt</span>
+            <select aria-label="Objekt suchen" value="" onChange={(event) => selectQuickObject(event.target.value)}>
+              <option value="" disabled>Suchen …</option>
+              <optgroup label="Sonnensystem">
+                <option value="sun">Sonne</option>
+                {data.planets.map((planet) => <option key={planet.id} value={planet.id}>{planet.name}</option>)}
+              </optgroup>
+              <optgroup label="Mission">
+                <option value="probe">Sonde</option>
+                <option value="carrier">Solar-Oberth-Träger</option>
+                <option value="sail">Electric Sail</option>
+                <option value="energy_sources">Energiequellen</option>
+              </optgroup>
+            </select>
+          </label>
+          <button
+            className={routePlanStatus === 'review' ? 'active' : ''}
+            type="button"
+            disabled={!selectedTarget || routeLoading}
+            aria-pressed={routePlanStatus === 'review'}
+            onClick={activateRouteDrawing}
+          >
+            {routePlanStatus === 'review' ? 'Zeichnen · aktiv' : routeSketch ? 'Entwurf bearbeiten' : 'Route zeichnen'}
+          </button>
+          {routePlanStatus === 'review' && routeSketch && <>
+            <label className="quick-draw-select">
+              <span>Werkzeug</span>
+              <select
+                aria-label="Zeichenwerkzeug"
+                value={routeDrawTool}
+                disabled={routeLoading}
+                onChange={(event) => {
+                  setRouteDrawTool(event.target.value as RouteDrawTool)
+                  setRouteSketchSelection(null)
+                }}
+              >
+                <option value="move">Auswählen</option>
+                <option value="route-point">Stützpunkt</option>
+                <option value="line">Linie</option>
+                <option value="radius">Radius/Kreis</option>
+              </select>
+            </label>
+            <label className="quick-draw-select">
+              <span>3D</span>
+              <select
+                aria-label="3D-Transformation"
+                value={routeTransformMode}
+                disabled={routeLoading}
+                onChange={(event) => {
+                  setRouteDrawTool('move')
+                  setRouteTransformMode(event.target.value as RouteTransformMode)
+                }}
+              >
+                <option value="translate">Verschieben</option>
+                <option value="rotate">Kreis drehen</option>
+              </select>
+            </label>
+            <button type="button" disabled={routeLoading || routeSketchHistory.length === 0} title="Rückgängig" aria-label="Zeichnung rückgängig" onClick={undoRouteSketch}>↶</button>
+            <button type="button" disabled={routeLoading || !routeSketchSelection} title="Auswahl löschen" aria-label="Auswahl aus Zeichnung löschen" onClick={deleteSelectedSketchElement}>⌫</button>
+            <button
+              className={entryCorridorEditorOpen ? 'active corridor-draw-action' : 'corridor-draw-action'}
+              type="button"
+              disabled={routeLoading || !routePlanNodes}
+              aria-pressed={entryCorridorEditorOpen}
+              onClick={toggleEntryCorridorEditor}
+            >
+              {entryCorridorEditorOpen ? 'Korridor · offen' : 'Korridor zeichnen'}
+            </button>
+            <button className="quick-route-calculate" type="button" disabled={routeLoading || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={() => void calculateWaypointRoute()}>{routeLoading ? 'Berechnet …' : 'Bahn berechnen'}</button>
+          </>}
+          {routePlanStatus !== 'review' && <>
+            <button className={playing ? 'active' : ''} type="button" disabled={!canPlay} onClick={() => setPlaying((active) => !active)}>{playing ? 'Pause' : 'Mission abspielen'}</button>
+            <button className={showMoons ? 'active' : ''} type="button" aria-pressed={showMoons} onClick={() => setShowMoons((visible) => !visible)}>Monde · {showMoons ? 'an' : 'aus'}</button>
+            <button type="button" disabled={!canPlay} onClick={() => setSelectedObject('probe')}>Sonde</button>
+          </>}
           <button className={navigationMode === 'pan' ? 'active' : ''} type="button" aria-pressed={navigationMode === 'pan'} onClick={() => setNavigationMode('pan')}>Ziehen</button>
           <button className={navigationMode === 'rotate' ? 'active' : ''} type="button" aria-pressed={navigationMode === 'rotate'} onClick={() => setNavigationMode('rotate')}>Drehen</button>
         </div>
@@ -818,9 +1137,61 @@ export function ThreeDView() {
           header={<div className="target-panel-title"><strong>Missionsplanung</strong><small>{selectedTarget?.name ?? 'Kein interstellares Ziel'} → {data.planets.find((planet) => planet.id === waypointId)?.name ?? waypointId}</small></div>}
         >
           <div className="target-controls-body">
-          <details className="target-control-section" open>
-            <summary><span>Ziel, Vorbeiflug & KI-Optimierung</span><small>{optimizationLoading ? 'KI rechnet …' : optimizationResult ? `${optimizationResult.minimumConfidencePct.toFixed(1)} %` : routePlanStatus === 'confirmed' ? 'Plan bestätigt' : 'Planung'}</small></summary>
+          <details className="target-control-section planner-simulation" open>
+            <summary><span>Simulation</span><small>{canPlay ? `Tag ${elapsedDays.toFixed(1)}` : 'bereit'}</small></summary>
             <div className="target-control-section-content">
+              <div className="planner-field-group">
+                <strong className="planner-group-title">Zeitsteuerung</strong>
+                <div className="transport-controls">
+                  <button type="button" disabled={!canPlay} onClick={() => setPlaying((active) => !active)}>{playing ? 'Pause' : 'Play'}</button>
+                  <button type="button" disabled={!canPlay} onClick={() => setElapsedDays((current) => Math.min(playbackEndDay, current + stepDays))}>+ Schritt</button>
+                  <button type="button" onClick={() => { setElapsedDays(0); setPlaying(false) }}>Zeit zurück</button>
+                </div>
+                <label className="range-field">
+                  <span>Missionstag<output>{elapsedDays.toFixed(1)} / {playbackEndDay.toFixed(1)}</output></span>
+                  <input
+                    type="range"
+                    min="0"
+                    max={Math.max(1, playbackEndDay)}
+                    step="0.1"
+                    value={Math.min(elapsedDays, Math.max(1, playbackEndDay))}
+                    disabled={!canPlay}
+                    onChange={(event) => { setElapsedDays(Math.max(0, Math.min(playbackEndDay, event.target.valueAsNumber))); setPlaying(false) }}
+                  />
+                </label>
+                <label className="range-field">
+                  <span>Geschwindigkeit<output>{simulationSpeed.toLocaleString('de-DE')} Tage/s</output></span>
+                  <input type="range" value={simulationSpeed} min="0.1" max="365" step="0.1" onChange={(event) => setSimulationSpeed(event.target.valueAsNumber)} />
+                </label>
+                <label className="parameter-field">
+                  <span>Einzelschritt</span>
+                  <select value={stepDays} onChange={(event) => setStepDays(Number(event.target.value))}>
+                    <option value="0.000694">1 Minute</option>
+                    <option value="0.041667">1 Stunde</option>
+                    <option value="1">1 Tag</option>
+                    <option value="7">1 Woche</option>
+                    <option value="30">1 Monat</option>
+                  </select>
+                </label>
+                <label className="parameter-field">
+                  <span>Startdatum</span>
+                  <input type="date" value={draft.startDate} onChange={(event) => { setDraft((current) => ({ ...current, startDate: event.target.value })); invalidateRoutePlan(); setPlannedRoute(null) }} />
+                </label>
+              </div>
+              {(simulationError || validationErrors.length > 0) && <div className="validation-box" role="alert">{simulationError ?? validationErrors.join(' ')}</div>}
+              <div className="panel-actions planner-simulation-actions">
+                <button className="primary" type="button" disabled={validationErrors.length > 0} onClick={() => void applySimulation()}>{result ? 'Simulation aktualisieren' : 'Simulation starten'}</button>
+                <button type="button" onClick={resetAll}>Alles zurücksetzen</button>
+                <button type="button" onClick={saveSimulationPreset}>Preset speichern</button>
+                <button type="button" onClick={loadSimulationPreset}>Preset laden</button>
+              </div>
+            </div>
+          </details>
+          <details className="target-control-section" open>
+            <summary><span>Ziel & Vorbeiflug</span><small>{routePlanStatus === 'confirmed' ? 'Plan bestätigt' : routePlanStatus === 'review' ? 'Entwurf offen' : 'Eingabe'}</small></summary>
+            <div className="target-control-section-content">
+          <div className="planner-field-group">
+          <strong className="planner-group-title">Zielgeometrie</strong>
           <label>
             <span>Interstellares Ziel</span>
             <select value={selectedTargetId} onChange={(event) => selectInterstellarTarget(event.target.value)}>
@@ -844,6 +1215,9 @@ export function ThreeDView() {
               {data.planets.filter((planet) => planet.id !== 'earth').map((planet) => <option key={planet.id} value={planet.id}>{planet.name}</option>)}
             </select>
           </label>
+          </div>
+          <div className="planner-field-group">
+          <strong className="planner-group-title">Begegnung</strong>
           <label><span>Erste Begegnungsschätzung (Missionstag)</span><input type="number" min="500" max="7305" step="1" value={encounterDay} onChange={(event) => { setEncounterDay(event.target.valueAsNumber); invalidateRoutePlan(); setPlannedRoute(null) }} /></label>
           <span>Dieser Tag ist nur der Startwert der Suche. Das tatsächliche Begegnungsdatum wird aus Startfenster und Flugzeit berechnet.</span>
           <label><span>Vorbeiflughöhe</span><input type="number" min="100" step="1000" value={flybyAltitudeKm} onChange={(event) => { setFlybyAltitudeKm(event.target.valueAsNumber); invalidateRoutePlan(); setPlannedRoute(null) }} /></label>
@@ -854,22 +1228,56 @@ export function ThreeDView() {
               <option value="observation">Beobachtung / Zielkurs</option>
             </select>
           </label>
+          </div>
+          <div className="planner-field-group">
+          <strong className="planner-group-title">Propagation</strong>
+          <label>
+            <span>Simultane N-Körper-Validierung</span>
+            <input
+              type="checkbox"
+              checked={highFidelityNBody}
+              onChange={(event) => {
+                setHighFidelityNBody(event.target.checked)
+                invalidateRoutePlan()
+                setPlannedRoute(null)
+              }}
+            />
+          </label>
+          <span>Differentiell korrigierte DOP853-Propagation mit Sonne und allen acht Planeten; deutlich rechenintensiver.</span>
+          </div>
           {routePlanStatus === 'hidden' && <button type="button" disabled={routeLoading || !selectedTarget} onClick={beginRouteReview}>Routenentwurf öffnen</button>}
           {routePlanStatus === 'review' && routeSketch && <div className="route-alternatives route-sketch-controls">
             <strong>Routenentwurf Erde → Sonne → {routePlanNodes?.waypointName ?? 'Wegpunkt'} → Ziel</strong>
-            <span className="route-ok">Die gelben, gesperrten Anker liegen exakt auf Erde, Sonne, {routePlanNodes?.waypointName ?? 'Wegpunkt'} am Begegnungstag und Ziel.</span>
-            <div className="route-sketch-toolbar" aria-label="Zeichenwerkzeuge">
-              <button className={routeDrawTool === 'move' ? 'selected' : ''} type="button" onClick={() => setRouteDrawTool('move')}>Auswählen</button>
-              <button className={routeDrawTool === 'route-point' ? 'selected' : ''} type="button" onClick={() => { setRouteDrawTool('route-point'); setRouteSketchSelection(null) }}>Stützpunkt</button>
-              <button className={routeDrawTool === 'line' ? 'selected' : ''} type="button" onClick={() => { setRouteDrawTool('line'); setRouteSketchSelection(null) }}>Linie</button>
-              <button className={routeDrawTool === 'radius' ? 'selected' : ''} type="button" onClick={() => { setRouteDrawTool('radius'); setRouteSketchSelection(null) }}>Radius/Kreis</button>
-            </div>
-            <div className="route-sketch-toolbar route-transform-toolbar" aria-label="3D-Transformation">
-              <button className={routeDrawTool === 'move' && routeTransformMode === 'translate' ? 'selected' : ''} type="button" onClick={() => { setRouteDrawTool('move'); setRouteTransformMode('translate') }}>3D verschieben</button>
-              <button className={routeDrawTool === 'move' && routeTransformMode === 'rotate' ? 'selected' : ''} type="button" onClick={() => { setRouteDrawTool('move'); setRouteTransformMode('rotate') }}>Kreis 3D drehen</button>
-            </div>
-            <span>Element oder Griff anklicken und an den roten, grünen oder blauen Achsen bewegen. Bei Kreisen schaltet „Kreis 3D drehen“ auf räumliche Rotation; der helle Außengriff ändert den Radius.</span>
+            <span className="route-ok">Die gelben, gesperrten Anker liegen exakt auf Erde, Sonne, {routePlanNodes?.waypointName ?? 'Wegpunkt'} am Begegnungstag und Ziel. Ein aktivierter SOI-Korridor ersetzt das Planetenzentrum als Transferziel.</span>
+            <span>Zeichenwerkzeug und 3D-Transformation bleiben während des gesamten Entwurfs oben in der Aktionsbox verfügbar. Element oder Griff anklicken und an den roten, grünen oder blauen Achsen bewegen; der helle Außengriff ändert den Kreisradius.</span>
             <span className={routeSketchSelection ? 'route-ok' : ''}>{routeSketchSelection ? `Ausgewählt: ${routeSketchSelection.kind === 'node' ? 'Stützpunkt' : routeSketchSelection.kind.startsWith('line') ? 'Linie' : routeSketchSelection.kind === 'circle-radius' ? 'Kreisradius' : 'Kreis'}` : 'Kein Element ausgewählt'} · Strg+Z: rückgängig · Entf: Auswahl löschen</span>
+            <div className="entry-corridor-route-controls">
+              <label className="optimizer-check">
+                <span>SOI-Eintrittskorridor als Zielbereich</span>
+                <input
+                  type="checkbox"
+                  checked={entryCorridor.enabled}
+                  onChange={(event) => {
+                    setEntryCorridor((current) => ({ ...current, enabled: event.target.checked }))
+                    if (event.target.checked) setAimpointEnabled(false)
+                    setPlannedRoute(null)
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                disabled={!entryCorridor.enabled}
+                onClick={() => setEntryCorridorEditorOpen(true)}
+              >
+                Korridor mit Bögen zeichnen & zoomen
+              </button>
+              <span>
+                ±{entryCorridor.horizontalHalfAngleDeg.toFixed(1)}° horizontal ·
+                ±{entryCorridor.verticalHalfAngleDeg.toFixed(1)}° vertikal ·
+                Drehung {entryCorridor.rotationDeg.toFixed(0)}°
+              </span>
+              {corridorBlocked && <span className="route-warning">{corridorRequiresDynamicCheck ? 'Schematischer Anflug gesperrt; die räumliche Abschnittskette führt eine dynamische Kollisionsprüfung aus: ' : 'Zielkorridor gesperrt: '}{corridorBlockMessage}</span>}
+            </div>
             {selectedSketchCircle && <div className="circle-orientation-controls">
               <strong>Kreisausrichtung im Raum</strong>
               {(['X', 'Y', 'Z'] as const).map((axis, index) => <label key={axis}>
@@ -901,12 +1309,17 @@ export function ThreeDView() {
               <button type="button" onClick={resetRouteSketch}>Entwurf zurücksetzen</button>
             </div>
             <span>Der Entwurf verändert die visuelle Führung. Die anschließend berechnete Nominalbahn bleibt physikalisch und wird zwingend durch den festen Ephemeridenanker geführt.</span>
-            <button className="ai-primary-action" type="button" disabled={routeLoading} onClick={() => { setRoutePlanStatus('confirmed'); setRouteDrawTool('move'); setRouteSketchSelection(null); void calculateWaypointRoute() }}>{routeLoading ? 'Berechne komplexe Bahn …' : 'Entwurf übernehmen & Bahn physikalisch berechnen'}</button>
+            <button className="ai-primary-action" type="button" disabled={routeLoading || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={() => { setRouteDrawTool('move'); setRouteSketchSelection(null); void calculateWaypointRoute() }}>{routeLoading ? 'Berechne komplexe Bahn …' : 'Entwurf übernehmen & Bahn physikalisch berechnen'}</button>
             <button type="button" onClick={discardRouteSketch}>Entwurf verwerfen</button>
           </div>}
           {routePlanStatus === 'confirmed' && <span className="route-ok">Routenplan bestätigt · Nach der Berechnung bleibt nur die Nominalbahn; Referenz und Streuung sind zuschaltbar.</span>}
           {routeError && <span className="route-warning">{routeError}</span>}
-          <span>Hinweis: Ein Klick auf einen Planeten setzt ihn ebenfalls als Wegpunkt.</span>
+          <span className="planner-hint">Ein Klick auf einen Planeten setzt ihn ebenfalls als Wegpunkt.</span>
+            </div>
+          </details>
+          <details className="target-control-section">
+            <summary><span>KI-Randwertsuche</span><small>{optimizationLoading ? 'rechnet …' : optimizationResult ? `${optimizationResult.minimumConfidencePct.toFixed(1)} %` : 'optional'}</small></summary>
+            <div className="target-control-section-content">
           <div className="ai-integrated-block">
           <div className="optimizer-divider"><strong>KI-gestützte Randwertsuche</strong><span>vorwärts + rückwärts · Mehrpass 12/8</span></div>
           <span>Die KI koppelt Sonnenaustritt, Ankunft und B-Plane direkt an das gewählte Ziel und den Vorbeiflug.</span>
@@ -915,7 +1328,7 @@ export function ThreeDView() {
           <label><span>Suchhorizont je Richtung (Tage)</span><input type="number" min="500" max="7305" step="1" value={optimizationWindowDays} onChange={(event) => { setOptimizationWindowDays(event.target.valueAsNumber); invalidateRoutePlan() }} /></label>
           <span>Startdatum, Begegnungstag und Horizont: bidirektional mit 100 → 10 → 5 → 1 Tagen · Grenzen 500 Tage bis 20 Jahre.</span>
           <label><span>Mindestkonfidenz</span><input type="number" min="90" max="99.9" step="0.5" value={optimizationThreshold} onChange={(event) => setOptimizationThreshold(event.target.valueAsNumber)} /></label>
-          <button className="ai-primary-action" type="button" disabled={optimizationLoading || routeLoading || routePlanStatus !== 'confirmed'} onClick={() => void optimizeLaunchWindow()}>{optimizationLoading ? 'KI koppelt Sonne, Jupiter und Ziel …' : routePlanStatus === 'confirmed' ? 'Route mit KI bidirektional optimieren' : 'Zuerst Routenplan bestätigen'}</button>
+          <button className="ai-primary-action" type="button" disabled={optimizationLoading || routeLoading || routePlanStatus !== 'confirmed' || corridorBlocked} onClick={() => void optimizeLaunchWindow()}>{optimizationLoading ? 'KI koppelt Sonne, Jupiter und Ziel …' : routePlanStatus === 'confirmed' ? 'Route mit KI bidirektional optimieren' : 'Zuerst Routenplan bestätigen'}</button>
           <label className="optimizer-check"><span>Zyklisch neu rechnen</span><input type="checkbox" checked={autoReoptimize} onChange={(event) => setAutoReoptimize(event.target.checked)} /></label>
           {autoReoptimize && <label><span>Intervall (min)</span><input type="number" min="1" step="1" value={recalculationMinutes} onChange={(event) => setRecalculationMinutes(event.target.valueAsNumber)} /></label>}
           {optimizationResult && (
@@ -971,7 +1384,7 @@ export function ThreeDView() {
           {plannedRoute?.warnings?.map((warning) => <span className="route-warning" key={`payload-warning-${warning}`}>⚠ {warning}</span>)}
           {plannedRoute?.solarBoundary && <span className={plannedRoute.solarBoundary.speedBoundaryReached ? 'route-ok' : 'route-warning'}>1-AE-Sonnenaustritt: {plannedRoute.solarBoundary.actualExitSpeedKmS.toFixed(2)} km/s · Ziel {plannedRoute.solarBoundary.desiredExitSpeedKmS?.toFixed(2) ?? '–'} km/s · erforderlicher Oberth-Vektor {plannedRoute.solarBoundary.requiredOberthVectorDeltaVKmS.toFixed(2)} km/s · Antriebs-Maximum {plannedRoute.solarBoundary.maximumExitSpeedWithAvailableBurnKmS.toFixed(2)} km/s · Mindest-Oberth-Δv fürs Ziel {plannedRoute.solarBoundary.minimumOberthDeltaVForDesiredSpeedKmS.toFixed(2)} km/s</span>}
           {plannedRoute?.transitionDiagnostics?.bidirectionalMatch && <span>Vorwärts/Rückwärts-Kopplung am Jupiter: Bedarf {plannedRoute.transitionDiagnostics.bidirectionalMatch.demandedTurnDeg.toFixed(2)}° / verfügbar {plannedRoute.transitionDiagnostics.bidirectionalMatch.maximumTurnDeg.toFixed(2)}° · Randrest {plannedRoute.transitionDiagnostics.bidirectionalMatch.boundaryVelocityResidualKmS.toFixed(3)} km/s · {plannedRoute.transitionDiagnostics.bidirectionalMatch.passiveMatch ? 'passiv geschlossen' : 'Korrektur erforderlich'}</span>}
-          {plannedRoute && <span className={plannedRoute.summary.targetProgressMonotonic ? 'route-ok' : 'route-warning'}>{plannedRoute.summary.targetProgressMonotonic ? 'Zielbedingung erfüllt: Nach Jupiter verläuft kein Abschnitt mehr vom Ziel weg.' : 'Zielbedingung verletzt: Nach Jupiter besteht noch rückläufiger Zielfortschritt.'}</span>}
+          {plannedRoute && !plannedRoute.routeSections?.length && <span className={plannedRoute.summary.targetProgressMonotonic ? 'route-ok' : 'route-warning'}>{plannedRoute.summary.targetProgressMonotonic ? 'Zielbedingung erfüllt: Nach Jupiter verläuft kein Abschnitt mehr vom Ziel weg.' : 'Zielbedingung verletzt: Nach Jupiter besteht noch rückläufiger Zielfortschritt.'}</span>}
           {plannedRoute && !plannedRoute.summary.solarDepartureInjectionApplied && <span className="route-warning">Solarer Übergang nicht ausführbar: benötigt {plannedRoute.summary.requiredInjectionDeltaVKmS.toFixed(2)} km/s bei {(plannedRoute.summary.availableInjectionDeltaVKmS ?? draft.oberthDeltaVKmS).toFixed(2)} km/s Budget und {(plannedRoute.transitionDiagnostics?.burnToLambertDirectionChangeDeg ?? 0).toFixed(2)}° Richtungswechsel. Die gestrichelten Abschnitte sind eine zeitlich abspielbare Sollsimulation, keine freigegebene Flugbahn.</span>}
           {plannedRoute?.summary.flybyMode === 'observation' && <span>Beobachtungsfenster ≈ {plannedRoute.summary.observationWindowHours.toFixed(1)} h · Perizentrum {plannedRoute.summary.periapsisSpeedKmS.toFixed(2)} km/s · Zielabweichung {plannedRoute.summary.targetAlignmentDeg.toFixed(1)}°</span>}
           {plannedRoute?.transitionDiagnostics && <span>SOI-Übergang: Position gekoppelt · Geschwindigkeitsrest Eingang {(plannedRoute.transitionDiagnostics.entryVelocityResidualKmS * 1_000).toFixed(2)} m/s · Soll-Zielimpuls {(plannedRoute.transitionDiagnostics.exitTargetInjectionDeltaVKmS ?? 0).toFixed(2)} km/s / {(plannedRoute.transitionDiagnostics.exitTargetInjectionDirectionChangeDeg ?? 0).toFixed(2)}° · {plannedRoute.transitionDiagnostics.exitTargetInjectionApplied ? 'angewendet' : 'nicht verfügbar, daher nicht propagiert'}</span>}
@@ -985,12 +1398,15 @@ export function ThreeDView() {
           <span className="inbound">Sonnensturz</span><span className="burn">Oberth</span><span className="sail">Electric Sail</span><span className="cruise">Deep Space</span>
         </div>
         <div className={`phase-timeline ${plannedRoute ? 'route-timeline' : ''}`} aria-label="Missionstimeline">
-          {(plannedRoute ? [
-            ['earth-to-oberth', 'Erde → Sonne'],
-            ['lambert-to-soi', 'Sonne → Jupiter'],
-            ['jupiter-hyperbola', 'Jupiter-Swing-by'],
-            ['post-flyby', 'Ausflug / Zielkurs'],
-          ] : [
+          {(plannedRoute ? (
+            plannedRoute.segments?.map((segment) => [segment.id, segment.label])
+            ?? [
+              ['earth-to-oberth', 'Erde → Sonne'],
+              ['lambert-to-soi', 'Sonne → Jupiter'],
+              ['jupiter-hyperbola', 'Jupiter-Swing-by'],
+              ['post-flyby', 'Ausflug / Zielkurs'],
+            ]
+          ) : [
             ['EARTH', 'Start / Erdorbit'],
             ['SUNDIVER', 'Sonnensturz'],
             ['SOLAR_APPROACH', 'Perihel'],
@@ -1028,11 +1444,33 @@ export function ThreeDView() {
           </div>
         )}
         <div className="planet-view-actions" aria-label="Kamerafokus">
-          <button type="button" onClick={() => showSystemOverview('perspective')}>3D-Perspektive</button>
-          <button type="button" onClick={() => showSystemOverview('top')}>Draufsicht</button>
-          <button type="button" onClick={() => showSystemOverview('front')}>Vorderansicht</button>
-          <button type="button" onClick={() => showSystemOverview('side')}>Seitenansicht</button>
-          <button type="button" disabled={!selectedPlanet} onClick={focusSelectedPlanet}>{selectedPlanet ? `${selectedPlanet.name} fokussieren` : 'Planet fokussieren'}</button>
+          <button type="button" onClick={() => showCameraView('perspective')}>3D-Perspektive</button>
+          <button type="button" onClick={() => showCameraView('top')}>Draufsicht</button>
+          <button type="button" onClick={() => showCameraView('front')}>Vorderansicht</button>
+          <button type="button" onClick={() => showCameraView('side')}>Seitenansicht</button>
+          <button
+            type="button"
+            disabled={cameraFocusRequest.kind === 'overview'}
+            aria-pressed={cameraFocusRequest.kind !== 'overview' && cameraFocusRequest.view === 'sun-behind'}
+            onClick={() => showCameraView('sun-behind')}
+          >
+            Sonne dahinter
+          </button>
+          <button
+            type="button"
+            disabled={cameraFocusRequest.kind === 'overview'}
+            aria-pressed={cameraFocusRequest.kind !== 'overview' && cameraFocusRequest.view === 'cross-axis'}
+            onClick={() => showCameraView('cross-axis')}
+          >
+            Queransicht 90°
+          </button>
+          <button type="button" disabled={cameraFocusRequest.kind !== 'point' && !selectedPlanet} onClick={refocusCurrentObject}>
+            {cameraFocusRequest.kind === 'point'
+              ? `${cameraFocusRequest.label} fokussieren`
+              : selectedPlanet
+                ? `${selectedPlanet.name} fokussieren`
+                : 'Planet fokussieren'}
+          </button>
         </div>
         <div className="scene-help">XYZ-Gizmo unten rechts · Planet anklicken: Nahfokus · Mausrad: zoomen · Linke Taste: {navigationMode === 'pan' ? 'Ansicht ziehen' : 'Ansicht räumlich drehen'} · Rechte Taste: {navigationMode === 'pan' ? 'drehen' : 'ziehen'}</div>
       </div>
@@ -1047,28 +1485,15 @@ export function ThreeDView() {
         currentPoint={plannedRoute ? null : currentPoint}
         visual={visual}
         draft={draft}
-        result={plannedRoute ? null : result}
+        result={plannedRoute ? null : visibleMissionResult}
         elapsedDays={elapsedDays}
-        playing={playing}
         canPlay={canPlay}
-        playbackEndDay={playbackEndDay}
-        simulationSpeed={simulationSpeed}
-        stepDays={stepDays}
-        error={simulationError}
         energyDeficit={optimizationResult?.solarEnergyFeasibility}
         onSelectPlanet={selectPlanet}
         onSelectObject={setSelectedObject}
         onSelectMoon={setSelectedMoon}
         onVisualChange={setVisual}
         onDraftChange={(nextDraft) => { setDraft(nextDraft); invalidateRoutePlan(); setPlannedRoute(null); setDirectSolarRoute(null); setOptimizationResult(null) }}
-        onApply={applySimulation}
-        onResetAll={resetAll}
-        onPlayingChange={setPlaying}
-        onElapsedDaysChange={(day) => { setElapsedDays(Math.max(0, Math.min(playbackEndDay, day))); setPlaying(false) }}
-        onSpeedChange={setSimulationSpeed}
-        onStepDaysChange={setStepDays}
-        onStep={() => canPlay && setElapsedDays((current) => Math.min(playbackEndDay, current + stepDays))}
-        onResetTime={() => { setElapsedDays(0); setPlaying(false) }}
       />
       {visual.showScaleNotice && (
         <p className="floating-scale-note">Orbitale Darstellung: {visual.orbitScale} × √AE · Neigungen vertikal ×{visual.inclinationScale} · Körperradien proportional zueinander · Missionsbahn RK4 / N-Körper</p>

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
+from ephemeris import get_ephemeris_status
 from calculation_audit import (
     METHOD_DOCUMENTATION,
     OPTIMIZER_AUDIT_LOG,
@@ -11,6 +12,7 @@ from calculation_audit import (
 )
 from trajectory import get_default_mission_config, simulate_mission
 from route_planner import simulate_waypoint_route
+from multi_route_planner import simulate_route_sections
 from mission_optimizer import optimize_launch_window
 from view_2d_celestials import render_2d_view
 from view_3d_celestials import get_solar_system_data
@@ -33,6 +35,14 @@ def disable_local_browser_cache(response):
 @app.get("/api/solar-system")
 def solar_system_data():
     return jsonify(get_solar_system_data())
+
+
+@app.get("/api/ephemeris/status")
+def ephemeris_status():
+    try:
+        return jsonify(get_ephemeris_status())
+    except RuntimeError as error:
+        return jsonify({"error": str(error), "active": False}), 503
 
 
 @app.get("/api/view/2d")
@@ -59,7 +69,10 @@ def mission_simulation():
 @app.post("/api/route/simulate")
 def waypoint_route_simulation():
     try:
-        return jsonify(simulate_waypoint_route(request.get_json(silent=True) or {}))
+        values = request.get_json(silent=True) or {}
+        if values.get("routeSections"):
+            return jsonify(simulate_route_sections(values))
+        return jsonify(simulate_waypoint_route(values))
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
     except RuntimeError as error:

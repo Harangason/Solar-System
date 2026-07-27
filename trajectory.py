@@ -8,6 +8,9 @@ from math import cos, hypot, pi, sin, sqrt
 
 from scipy import constants
 
+from ephemeris import get_ephemeris_status
+from ephemeris import planet_state as _spice_planet_state
+from ephemeris import utc_to_ephemeris_seconds
 from view_3d_celestials import PLANET_DATA
 from propulsion import (
     PropulsionSystem,
@@ -279,6 +282,7 @@ class MissionResult:
     def to_dict(self) -> dict:
         return {
             "config": self.config.to_dict(),
+            "ephemeris": get_ephemeris_status(),
             "events": [event.to_dict() for event in self.events],
             "trajectory": [point.to_dict() for point in self.trajectory],
             "summary": self.summary.to_dict(),
@@ -300,10 +304,13 @@ def _normalize(vector: Vector) -> Vector:
 
 def _mission_epoch_days(start_date: str) -> float:
     timestamp = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+    ephemeris_seconds = utc_to_ephemeris_seconds(timestamp)
+    if ephemeris_seconds is not None:
+        return ephemeris_seconds / DAY_SECONDS
     return (timestamp - J2000).total_seconds() / DAY_SECONDS
 
 
-def _planet_position_at(ephemeris: tuple, days_since_j2000: float) -> Vector:
+def _kepler_planet_position_at(ephemeris: tuple, days_since_j2000: float) -> Vector:
     """Approximate heliocentric J2000 position from the shared orbital elements."""
     _, _, semi_major_axis_au, period_days, eccentricity, inclination_deg, mean_longitude_deg, perihelion_deg, node_deg = ephemeris
     inclination = inclination_deg * pi / 180
@@ -331,9 +338,48 @@ def _planet_position_at(ephemeris: tuple, days_since_j2000: float) -> Vector:
     return x, y, z
 
 
+def _planet_position_at(ephemeris: tuple, days_since_j2000: float) -> Vector:
+    """Return a geometric heliocentric ECLIPJ2000 planet position."""
+    spice_result = _spice_planet_state(
+        str(ephemeris[0]), days_since_j2000 * DAY_SECONDS
+    )
+    if spice_result is not None:
+        state, _ = spice_result
+        return state[0], state[1], state[2]
+    return _kepler_planet_position_at(ephemeris, days_since_j2000)
+
+
+def _planet_state_at(ephemeris: tuple, days_since_j2000: float) -> State:
+    """Return position and velocity from SPICE or the Kepler fallback."""
+    spice_result = _spice_planet_state(
+        str(ephemeris[0]), days_since_j2000 * DAY_SECONDS
+    )
+    if spice_result is not None:
+        state, _ = spice_result
+        return (
+            (state[0], state[1], state[2]),
+            (state[3], state[4], state[5]),
+        )
+
+    delta_days = 60.0 / DAY_SECONDS
+    position = _kepler_planet_position_at(ephemeris, days_since_j2000)
+    before = _kepler_planet_position_at(ephemeris, days_since_j2000 - delta_days)
+    after = _kepler_planet_position_at(ephemeris, days_since_j2000 + delta_days)
+    velocity = tuple(
+        (after[index] - before[index]) / 120.0 for index in range(3)
+    )
+    return position, velocity  # type: ignore[return-value]
+
+
+def _earth_state_at(start_date: str) -> State:
+    earth = next(
+        ephemeris for ephemeris in PLANET_EPHEMERIDES if ephemeris[0] == "earth"
+    )
+    return _planet_state_at(earth, _mission_epoch_days(start_date))
+
+
 def _earth_position_at(start_date: str) -> Vector:
-    earth = next(ephemeris for ephemeris in PLANET_EPHEMERIDES if ephemeris[0] == "earth")
-    return _planet_position_at(earth, _mission_epoch_days(start_date))
+    return _earth_state_at(start_date)[0]
 
 
 def _planetary_perturbation(position: Vector, days_since_j2000: float) -> Vector:
@@ -710,9 +756,9 @@ def simulate_mission(config_or_values: MissionConfig | dict | None = None) -> Mi
             mass_kg=satellite.total_mass_kg,
         ))
 
-    earth_position = _earth_position_at(config.start_date)
+    earth_position, earth_velocity = _earth_state_at(config.start_date)
     earth_distance = _magnitude(earth_position)
-    prograde = _normalize((-earth_position[1], earth_position[0], 0.0))
+    prograde = _normalize(earth_velocity)
     parking_radius = EARTH_RADIUS_KM + config.parking_orbit_altitude_km
     parking_speed = sqrt(MU_EARTH / parking_radius)
     earth_circular_speed = sqrt(MU_SUN / earth_distance)

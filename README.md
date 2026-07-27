@@ -43,13 +43,64 @@ Routenberechnung sowie 2D/3D-Visualisierung auf.
 
 - Heliozentrisches, ekliptikales, kartesisches Bezugssystem.
 - Positionen in `km`, Geschwindigkeiten in `km/s`, Zeiten in `s` bzw. Tagen.
-- Planetenpositionen aus vereinfachten J2000-Orbitalelementen.
+- Planetenpositionen optional aus NAIF-SPICE-Kernels; ohne lokale Kernel
+  automatische Rueckfallebene auf vereinfachte J2000-Orbitalelemente.
 - Sonnenzentrierte Zwei-Koerper-Dynamik mit optionalen planetaren Stoertermen.
 - RK4-Integration fuer die Solar-Oberth-Missionsbahn.
 - Lambert-Randwertloesung fuer Wegpunkt-Transfers.
 - Patched-Conic-Swing-by mit Einflusssphaere, Hyperbel und Zielasymptote.
+- Optionale simultane N-Koerper-Validierung ohne Kraftmodellwechsel an der SOI.
 - Modulare Antriebsmodelle fuer impulsive Burns, Solar Sail, Electric Sail,
   elektrische Triebwerke und theoretische Konzepte.
+
+## SPICE-Ephemeriden
+
+Das Python-Backend verwendet im Standardmodus `auto` SPICE, sobald SpiceyPy
+und ein lokaler Meta-Kernel vorhanden sind. Die benötigten generischen
+NAIF-Kernels werden bewusst nicht in Git gespeichert. Installation und
+Download:
+
+```powershell
+pip install -r requirements.txt
+python scripts/download_spice_kernels.py
+python main.py
+```
+
+Der Downloader bezieht über HTTPS direkt von NAIF:
+
+- `naif0012.tls` für die Umrechnung zwischen UTC und Ephemeridenzeit (ET),
+- `de440s.bsp` für die kompakten DE440-Planetenephemeriden.
+
+Er prüft `de440s.bsp` gegen die von NAIF veröffentlichte MD5-Prüfsumme und
+schreibt `kernels/solar_system.tm` mit absoluten lokalen Kernelpfaden. Nach
+einem Kernel-Download muss ein bereits laufender Python-Server neu gestartet
+werden.
+
+Die Laufzeitkonfiguration erfolgt über Umgebungsvariablen:
+
+```powershell
+# SPICE verbindlich verlangen; fehlende/ungültige Kernel werden zum Fehler
+$env:SOLAR_SYSTEM_EPHEMERIS = "spice"
+
+# Alternativen: "auto" (Standard) oder "kepler"
+$env:SOLAR_SYSTEM_EPHEMERIS = "auto"
+
+# Optional einen eigenen Meta-Kernel verwenden
+$env:SOLAR_SYSTEM_SPICE_METAKERNEL = "C:\Pfad\zu\mission.tm"
+```
+
+`GET /api/ephemeris/status` meldet den aktiven Modus, Frame, Beobachter,
+SpiceyPy-Version und die tatsächlich aufgelösten SPICE-Zielkörper. Abfragen
+verwenden geometrische Zustände im Frame `ECLIPJ2000`, relativ zum
+Sonnenzentrum und ohne Lichtzeit- oder Aberrationskorrektur (`NONE`). Das ist
+für die dynamische Propagation vorgesehen; scheinbare Beobachtungsrichtungen
+würden eine andere Aberrationskonfiguration benötigen.
+
+Das kompakte `de440s.bsp` enthält für mehrere Planetensysteme nur deren
+Baryzentrum. Das Backend bevorzugt einen Planetenkörper, wenn ein zusätzlicher
+passender Satelliten-SPK im eigenen Meta-Kernel vorhanden ist, und verwendet
+sonst das zugehörige Baryzentrum. Für hochgenaue Vorbeiflüge an Riesenplaneten
+sollte deshalb ein missionsgeeigneter Satelliten-SPK ergänzt werden.
 
 ## Zentrale Konstanten und Notation
 
@@ -79,32 +130,47 @@ Notation:
 
 <img src="docs/assets/formulas/state-dynamics-rk4.svg" alt="State-space dynamics and RK4 propagation" width="780">
 
-Die Missionsbahn wird als Anfangswertproblem erster Ordnung formuliert. Der
-Zustandsvektor lautet:
+Die Missionsbahn wird als Anfangswertproblem erster Ordnung formuliert. Aus
+dem Anfangsort $\mathbf r_0$ und der Anfangsgeschwindigkeit $\mathbf v_0$
+entsteht die Anfangsbedingung
+
+$$
+\mathbf x(t_0)=\mathbf x_0
+=
+\begin{bmatrix}
+\mathbf r_0\\
+\mathbf v_0
+\end{bmatrix}
+\in\mathbb R^6
+$$
+
+Der zeitabhängige Zustandsvektor ist
 
 $$
 \mathbf x(t)
 =
 \begin{bmatrix}
-\mathbf r(t) \\
+\mathbf r(t)\\
 \mathbf v(t)
-\end{bmatrix}
+\end{bmatrix},
 $$
 
-Damit gilt allgemein:
+wobei $\mathbf r$ in Kilometern und $\mathbf v$ in Kilometern pro Sekunde
+gespeichert wird. Die zugehörige Differentialgleichung lautet
 
 $$
 \dot{\mathbf x}(t)
 =
 \begin{bmatrix}
-\dot{\mathbf r}(t) \\
+\dot{\mathbf r}(t)\\
 \dot{\mathbf v}(t)
 \end{bmatrix}
 =
 \begin{bmatrix}
-\mathbf v(t) \\
-\mathbf a(t)
+\mathbf v(t)\\
+\mathbf a(\mathbf r(t),\mathbf v(t),t)
 \end{bmatrix}
+=\mathbf f(t,\mathbf x(t))
 $$
 
 Fuer die reine Zwei-Koerper-Bewegung im Sonnenpotential:
@@ -114,10 +180,12 @@ $$
 = -\mu_\odot \frac{\mathbf r}{\|\mathbf r\|^3}
 $$
 
-Mit aktivierten Stoerungen und Antriebsbeschleunigungen:
+Dabei ist $\mu_\odot$ in $\mathrm{km^3/s^2}$ angegeben, sodass
+$\mathbf a_\odot$ die Einheit $\mathrm{km/s^2}$ besitzt. Mit aktivierten
+Stoerungen und kontinuierlichen Antriebsbeschleunigungen wird
 
 $$
-\mathbf a(\mathbf r,t)
+\mathbf a(\mathbf r,\mathbf v,t)
 =
 \mathbf a_\odot(\mathbf r)
 + \mathbf a_{\mathrm{pert}}(\mathbf r,t)
@@ -125,39 +193,105 @@ $$
 + \mathbf a_{\mathrm{prop}}(\mathbf r,\mathbf v,t)
 $$
 
-Die Implementierung steht in `trajectory._acceleration()`. Die Integration
-erfolgt in `trajectory._rk4()` mit klassischem Runge-Kutta vierter Ordnung fuer
-$\dot{\mathbf x}=\mathbf f(t,\mathbf x)$:
+Der planetare Stoerterm wird im heliozentrischen Bezugssystem einschließlich
+des indirekten Terms ausgewertet:
+
+$$
+\mathbf a_{\mathrm{pert}}(\mathbf r,t)
+=
+\sum_p\mu_p
+\left[
+\frac{\mathbf r_p(t)-\mathbf r}
+     {\|\mathbf r_p(t)-\mathbf r\|^3}
+-
+\frac{\mathbf r_p(t)}
+     {\|\mathbf r_p(t)\|^3}
+\right]
+$$
+
+`trajectory._acceleration()` kombiniert Sonnenbeschleunigung, optionale
+planetare Stoerungen, die optionale radiale Segelbeschleunigung und einen
+externen Beschleunigungsvektor. `PropulsionSystem.update()` berechnet diesen
+externen Vektor am Anfang eines Zeitschritts aus Zustand, verfügbarer Leistung
+und aktueller Masse. `trajectory._rk4()` hält ihn innerhalb dieses Schritts
+konstant; Sonnen-, Stoer- und Segelbeschleunigung werden dagegen an den
+jeweiligen RK4-Zwischenzuständen und Zwischenzeiten neu ausgewertet.
+
+Impulsive Manoever wie Solar-Oberth-Burn und Nutzlasttrennung gehören nicht
+zur kontinuierlichen rechten Seite $\mathbf f$. Sie ändern den Zustand an
+einem Ereigniszeitpunkt direkt:
+
+$$
+\mathbf r^+=\mathbf r^-,
+\qquad
+\mathbf v^+=\mathbf v^-+\Delta\mathbf v
+$$
+
+Zwischen solchen Ereignissen integriert `trajectory._rk4()` die Gleichung
+$\dot{\mathbf x}=\mathbf f(t,\mathbf x)$ mit dem klassischen
+Runge-Kutta-Verfahren vierter Ordnung:
 
 $$
 \begin{aligned}
-\mathbf k_1 &= \mathbf f(t_n,\mathbf x_n),\\
-\mathbf k_2 &= \mathbf f(t_n+\tfrac{\Delta t}{2},
-                         \mathbf x_n+\tfrac{\Delta t}{2}\mathbf k_1),\\
-\mathbf k_3 &= \mathbf f(t_n+\tfrac{\Delta t}{2},
-                         \mathbf x_n+\tfrac{\Delta t}{2}\mathbf k_2),\\
-\mathbf k_4 &= \mathbf f(t_n+\Delta t,
-                         \mathbf x_n+\Delta t\,\mathbf k_3),\\
+\mathbf k_1
+&=\mathbf f(t_n,\mathbf x_n),\\
+\mathbf k_2
+&=\mathbf f\!\left(
+t_n+\frac{\Delta t}{2},
+\mathbf x_n+\frac{\Delta t}{2}\mathbf k_1
+\right),\\
+\mathbf k_3
+&=\mathbf f\!\left(
+t_n+\frac{\Delta t}{2},
+\mathbf x_n+\frac{\Delta t}{2}\mathbf k_2
+\right),\\
+\mathbf k_4
+&=\mathbf f\!\left(
+t_n+\Delta t,
+\mathbf x_n+\Delta t\,\mathbf k_3
+\right),\\
 \mathbf x_{n+1}
-&= \mathbf x_n
-+ \frac{\Delta t}{6}
-  (\mathbf k_1+2\mathbf k_2+2\mathbf k_3+\mathbf k_4).
+&=\mathbf x_n
++\frac{\Delta t}{6}
+\left(
+\mathbf k_1+2\mathbf k_2+2\mathbf k_3+\mathbf k_4
+\right)
 \end{aligned}
 $$
 
-Die Schrittweite wird ueber `trajectory._adaptive_step_seconds()` an den
-Sonnenabstand angepasst. In Sonnennaehe werden deutlich kleinere Zeitschritte
-verwendet als im aeusseren Sonnensystem.
+Insbesondere lautet das Zustandsargument von $\mathbf k_4$ korrekt
+$\mathbf x_n+\Delta t\,\mathbf k_3$. Das Verfahren besitzt bei hinreichend
+glatter rechter Seite einen lokalen Fehler der Ordnung
+$\mathcal O(\Delta t^5)$ und einen globalen Fehler der Ordnung
+$\mathcal O(\Delta t^4)$.
+
+`trajectory._adaptive_step_seconds()` verwendet keine eingebettete
+Fehlerschätzung. Die Funktion wählt die Schrittweite stückweise aus dem
+Sonnenabstand $r_{\mathrm{AU}}=\|\mathbf r\|/\mathrm{AU}$:
+
+| Sonnenabstand $r_{\mathrm{AU}}$ | Schrittweite $\Delta t$ |
+| --- | ---: |
+| $r_{\mathrm{AU}}<0{,}08$ | $30\,\mathrm{s}$ |
+| $0{,}08\le r_{\mathrm{AU}}<0{,}15$ | $180\,\mathrm{s}$ |
+| $0{,}15\le r_{\mathrm{AU}}<0{,}35$ | $900\,\mathrm{s}$ |
+| $0{,}35\le r_{\mathrm{AU}}<0{,}7$ | $3600\,\mathrm{s}$ |
+| $r_{\mathrm{AU}}\ge0{,}7$, Anflug | $21600\,\mathrm{s}$ |
+| $r_{\mathrm{AU}}\ge0{,}7$, Ausflug | $43200\,\mathrm{s}$ |
+
+In Sonnennaehe werden damit kleinere Schritte als im aeusseren Sonnensystem
+verwendet. Es handelt sich um eine zustandsabhängige Schrittweitensteuerung,
+nicht um eine automatische Einhaltung einer vorgegebenen Fehlertoleranz.
 
 Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
 | --- | --- | --- | --- |
-| $\mathbf a_\odot=-\mu_\odot\mathbf r/\|\mathbf r\|^3$ | $\|\mathbf r\|\rightarrow0$ | Singularitaet im Zentrum des Sonnenpotentials | Physikalisch unzulaessiger Zustand; die Missionskonfiguration erzwingt ein Perihel ausserhalb der Sonne. |
-| $\hat{\mathbf r}=\mathbf r/\|\mathbf r\|$ | $\|\mathbf r\|=0$ | Radialrichtung undefiniert | `_normalize()` verwendet eine Ersatzlaenge, die Simulation soll diesen Zustand aber durch Validierung vermeiden. |
-| $\hat{\mathbf v}=\mathbf v/\|\mathbf v\|$ | $\|\mathbf v\|=0$ | Bewegungsrichtung undefiniert | Fuer Burns nur sinnvoll bei nicht verschwindender Geschwindigkeit; `_normalize()` verhindert Division durch null, ersetzt aber keine physikalische Freigabe. |
-| RK4-Schritt | $\Delta t\le0$ oder zu grosses $\Delta t$ | Keine Vorwaertspropagation bzw. Integrationsfehler | Schrittweiten werden radiusabhaengig begrenzt; nahe der Sonne kleinere Schritte. |
-| Stoerbeschleunigung | Abstand Sonde-Planet $\rightarrow0$ | Planetare Stoerterme wuerden singulaer | Innerhalb der planetaren SOI wird der heliocentrische Stoerterm uebersprungen und das lokale Patched-Conic-Modell verwendet. |
+| $\mathbf a_\odot=-\mu_\odot\mathbf r/\|\mathbf r\|^3$ | $\|\mathbf r\|\rightarrow0$ | Singularitaet des idealisierten Punktmassenpotentials | Die Konfigurationsprüfung verlangt ein Zielperihel außerhalb des Sonnenradius. `_acceleration()` selbst enthält keinen zusätzlichen Schutz für $\mathbf r=\mathbf0$. |
+| $\hat{\mathbf r}=\mathbf r/\|\mathbf r\|$ oder $\hat{\mathbf v}=\mathbf v/\|\mathbf v\|$ | Vektornorm $=0$ | Richtung ist mathematisch undefiniert | `_normalize()` teilt ersatzweise durch $1$ und liefert für den Nullvektor wieder den Nullvektor. Das verhindert eine Division durch null, erzeugt aber keine physikalisch definierte Richtung. |
+| Radiale Segelbeschleunigung | $r_{\mathrm{AU}}\rightarrow0$ | Das verwendete $1/r$-Modell würde divergieren | Der Nenner wird mit `max(0.1, radius_au)` auf mindestens $0{,}1$ begrenzt. |
+| Planetarer Stoerterm | $\|\mathbf r_p-\mathbf r\|\rightarrow0$ | Der direkte planetare Term würde singulär | Das schnelle Segmentmodell überspringt den Term innerhalb der SOI. Die simultane Validierung behält ihn bei und meldet eine Unterschreitung des festen Körperradius als Kollision. |
+| Antriebsbeschleunigung | Gesamtmasse $\rightarrow0$ | $a=T/m$ würde divergieren | Die Antriebsberechnung begrenzt den Massennenner auf mindestens $10^{-9}\,\mathrm{kg}$; zulässige Konfigurationen müssen dennoch positive Massen besitzen. |
+| RK4-Schritt | $\Delta t\le0$ oder zu großes $\Delta t$ | Keine Vorwärtspropagation beziehungsweise wachsender Diskretisierungsfehler | Die Missionsschleifen übergeben positive, radiusabhängig begrenzte Schritte. `_rk4()` selbst führt keine Fehlerschätzung und keine Schrittvalidierung aus. |
 
 ## Planetenpositionen
 
@@ -444,6 +578,78 @@ $$ t(H) = \sqrt{\frac{a_h^3}{\mu_p}}\left(e_h\sinh H-H\right) $$
 Die Routinen liegen in `route_planner.py`; Details und Audit-Regeln stehen in
 `CALCULATION_METHODS.md`.
 
+### Eintrittskorridor auf der planetaren SOI
+
+Im geprueften Routenentwurf kann `SOI-Eintrittskorridor als Zielbereich`
+aktiviert werden. Der lokale Editor zeigt die Einflusssphaere als Kugel und
+bietet zwei Ansichten:
+
+- `SOI gesamt` zur Orientierung um den Planeten,
+- `Korridor-Zoom` zur genauen Bearbeitung des gewaehlten Bereichs.
+
+Ein Klick oder Ziehen auf der SOI verschiebt den Mittelpunkt. Vier gelbe
+Boegen begrenzen die Flaeche; horizontaler und vertikaler Halbwinkel bestimmen
+ihre Ausdehnung, die Bogendrehung ihre Orientierung in der Tangentialebene.
+Der Editor speichert eine planetenzentrierte Einheitsrichtung und die drei
+Winkelparameter, nicht eine von der Darstellungsskalierung abhaengige
+Bildschirmposition.
+
+Mit aktiviertem Korridor verwendet die Lambert-Planung nicht das
+Planetenzentrum als Randpunkt. Sie erzeugt ein `3 x 3`-Raster auf der
+Korridorfläche, verwirft unloesbare Lambert-Ziele und waehlt aus den
+erreichbaren Punkten den mit dem kleinsten Einspritz-Delta-v. Der gewaehlte
+SOI-Punkt orientiert anschließend den Eintritt der lokalen Hyperbel. API-Feld:
+
+```json
+{
+  "entryCorridor": {
+    "enabled": true,
+    "centerDirection": [1.0, 0.0, 0.0],
+    "horizontalHalfAngleDeg": 8.0,
+    "verticalHalfAngleDeg": 5.0,
+    "rotationDeg": 20.0
+  }
+}
+```
+
+Das Ergebnisfeld `entryCorridor` enthaelt den gewaehlten Zielpunkt, Zahl der
+bewerteten Ziele, Soll- und Ist-Winkel sowie `entryInsideCorridor`. Ein
+einzelner Flyby-Aimpoint und ein flächiger Eintrittskorridor sind bewusst
+gegenseitig ausgeschlossen, weil beide sonst dieselbe Hyperbelebene
+widerspruechlich drehen koennten.
+
+### Simultane N-Koerper-Validierung
+
+Patched Conics bleibt das schnelle Entwurfsmodell. Mit dem Schalter
+`Simultane N-Koerper-Validierung` oder dem API-Feld
+`"highFidelityNBody": true` wird die entworfene Route zusaetzlich mit einem
+durchgaengigen heliozentrischen Kraftmodell geprueft:
+
+$$
+\ddot{\mathbf r} =
+-\mu_\odot\frac{\mathbf r}{\|\mathbf r\|^3}
++\sum_p\mu_p\left(
+\frac{\mathbf r_p-\mathbf r}{\|\mathbf r_p-\mathbf r\|^3}
+-\frac{\mathbf r_p}{\|\mathbf r_p\|^3}
+\right).
+$$
+
+Alle acht Planeten wirken gleichzeitig mit ihren zeitabhaengigen
+SPICE- beziehungsweise Kepler-Zustaenden. Der indirekte Term beruecksichtigt
+die Beschleunigung des heliozentrischen Ursprungs. An der planetaren SOI wird
+weder ein Gravitationsterm ein- oder ausgeschaltet noch die Geschwindigkeit
+kuenstlich gedreht.
+
+Eine differentielle Korrektur variiert den Abflug-Geschwindigkeitsvektor, bis
+der entworfene SOI-Eintritt bis auf `10 km` getroffen wird. Danach wird der
+Vorbeiflug kontinuierlich propagiert; nur ein ausdruecklich ausgewiesenes
+Zielinjektionsmanoever darf die Geschwindigkeit sprunghaft aendern. Verwendet
+wird DOP853 mit `rtol=1e-11`, Positions-`atol=1e-3 km`,
+Geschwindigkeits-`atol=1e-12 km/s` und maximal `3 Tagen` Schrittweite.
+Konvergenz, Korrektur-Delta-v, tatsaechliches Perizentrum, Kollision und
+Abweichung vom Patched-Conic-Ausgang stehen unter `highFidelityNBody` im
+API-Ergebnis und werden als eigene 3D-Bahn dargestellt.
+
 Grenzwert- und Singularitaetsbetrachtung:
 
 | Gleichung | Kritischer Grenzfall | Bedeutung | Behandlung im Modell |
@@ -536,6 +742,7 @@ Grenzwert- und Singularitaetsbetrachtung:
 | `main.py` | Flask-Routen, API-Endpunkte, Serverstart |
 | `trajectory.py` | Solar-Oberth-Mission, RK4, N-Body-Stoerungen, Kalman-Navigation |
 | `route_planner.py` | Lambert-Transfer, Swing-by, Zielasymptote, Audit |
+| `nbody_propagation.py` | Differentielle Korrektur und simultane DOP853-N-Koerper-Validierung |
 | `propulsion.py` | Modulare Antriebsmodelle und kontinuierliche Beschleunigungen |
 | `satellite.py` | Raumfahrzeugstruktur, Massen, Stufen, Tsiolkovsky-Burns |
 | `mission_optimizer.py` | Suche und Bewertung von Missionsfenstern |
@@ -620,14 +827,17 @@ logs/mission_optimizer.jsonl
 ```
 
 Diese Dateien enthalten Grenzpunktfehler, Delta-v-Anforderungen,
-Kollisionsreserven, Zielwinkel und Plausibilitaetsinformationen.
+Kollisionsreserven, Zielwinkel, Plausibilitaetsinformationen und das für den
+Lauf aktive Ephemeriden-Backend einschließlich Meta-Kernel und aufgelöster
+SPICE-Zielkörper.
 
 ## Konfiguration
 
 - Standard-Port: `30000`.
 - Zentrale Parameter liegen im jeweiligen Modul, insbesondere in `main.py`,
   `trajectory.py`, `propulsion.py` und `web/src/missionSimulation.ts`.
-- Unterstuetzte Kernabhaengigkeiten: `Flask`, `SciPy`, `Matplotlib`.
+- Unterstuetzte Kernabhaengigkeiten: `Flask`, `SciPy`, `Matplotlib`,
+  `SpiceyPy`.
 
 ## Troubleshooting
 
@@ -635,6 +845,8 @@ Kollisionsreserven, Zielwinkel und Plausibilitaetsinformationen.
 | --- | --- |
 | Port bereits belegt | Alten Prozess stoppen oder Port in `main.py` wechseln. |
 | `ModuleNotFoundError` | Virtuelle Umgebung pruefen und `pip install -r requirements.txt` erneut ausfuehren. |
+| Status-Endpunkt meldet `kepler` | `python scripts/download_spice_kernels.py` ausführen und den Server neu starten. |
+| SPICE meldet fehlende Abdeckung | Einen SPK mit passendem Zeitbereich in einem eigenen Meta-Kernel ergänzen oder bewusst den Modus `kepler` wählen. |
 | Unerwartete Simulationswerte | Eingaben auf Sinnwerte pruefen und mit kleineren Testfaellen starten. |
 
 ## Mitwirken
@@ -649,11 +861,20 @@ verweisen.
 
 ## Modellgrenzen
 
-- Die Planetendaten sind vereinfachte J2000-Elemente und ersetzen keine
-  SPICE-Ephemeriden.
-- Patched Conics koppelt Sonnen- und Planetendynamik abschnittsweise; fuer eine
-  missionskritische Auslegung waere eine hochgenaue simultane N-Koerper-
-  Propagation erforderlich.
+- Im SPICE-Modus bestimmt die Abdeckung der geladenen SPKs den zulässigen
+  Zeitraum. Im Kepler-Rueckfallmodus bleiben die Planetendaten vereinfachte
+  J2000-Elemente.
+- `de440s.bsp` kann für äußere Planeten nur das Systembaryzentrum liefern.
+  Hochgenaue Flyby-Auslegung benötigt zusätzliche, missionsgeeignete
+  Satelliten-SPKs und weiterhin eine präzisere Kraftmodellierung.
+- Patched Conics bleibt das schnelle Entwurfsmodell. Die optionale
+  DOP853-N-Koerper-Validierung propagiert Sonnen- und Planetengravitation
+  gleichzeitig und ohne SOI-Umschaltung.
+- Auch diese Validierung behandelt Himmelskoerper als Punktmassen und das
+  Raumfahrzeug als masselos. Monde, nicht-sphaerische Gravitationsfelder,
+  Relativistik, Strahlungsdruck, Atmosphaere, Manoeverfehler und
+  Ephemeridenunsicherheit fehlen. Sie ist daher innerhalb dieses Kraftmodells
+  hochgenau, aber keine missionskritische Navigationsfreigabe.
 - Einige Antriebe sind bewusst als `conceptual`, `speculative` oder `fictional`
   markiert. `warp` veraendert die Newtonsche Flugbahn nicht und dient nur der
   Visualisierung.

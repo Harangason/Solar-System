@@ -33,7 +33,7 @@ from trajectory import (
     PLANET_EPHEMERIDES,
     MissionConfig,
     _add,
-    _earth_position_at,
+    _earth_state_at,
     _magnitude,
     _mission_epoch_days,
     _normalize,
@@ -127,13 +127,13 @@ def _calendar_date(start_date: str, elapsed_days: float) -> str:
 
 
 def _analytical_oberth_state(config: MissionConfig) -> tuple[tuple, tuple, float]:
-    earth_position = _earth_position_at(config.start_date)
+    earth_position, earth_velocity = _earth_state_at(config.start_date)
     earth_distance = _magnitude(earth_position)
     perihelion_radius = config.target_perihelion_au * AU_KM
     semi_major_axis = (earth_distance + perihelion_radius) / 2
     transfer_seconds = pi * sqrt(semi_major_axis**3 / MU_SUN)
     perihelion_position = tuple(-component * perihelion_radius / earth_distance for component in earth_position)
-    initial_prograde = _normalize((-earth_position[1], earth_position[0], 0.0))
+    initial_prograde = _normalize(earth_velocity)
     perihelion_direction = tuple(-component for component in initial_prograde)
     perihelion_speed = sqrt(MU_SUN * (2 / perihelion_radius - 1 / semi_major_axis))
     post_burn_speed = perihelion_speed + max(0.0, config.oberth_delta_v_km_s)

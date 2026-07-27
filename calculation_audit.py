@@ -8,6 +8,8 @@ from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
+from ephemeris import get_ephemeris_status
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 AUDIT_DIRECTORY = PROJECT_ROOT / "logs"
@@ -25,6 +27,7 @@ def write_route_audit(calculation: dict) -> dict:
         "runId": run_id,
         "createdAtUtc": datetime.now(timezone.utc).isoformat(),
         "calculationType": "segmented-waypoint-route",
+        "ephemeris": get_ephemeris_status(),
         **calculation,
     }
     serialized = json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
@@ -48,6 +51,7 @@ def write_optimizer_audit(calculation: dict) -> dict:
         "runId": run_id,
         "createdAtUtc": datetime.now(timezone.utc).isoformat(),
         "calculationType": "iterative-mission-navigation",
+        "ephemeris": get_ephemeris_status(),
         **calculation,
     }
     serialized = json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False)

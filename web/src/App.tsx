@@ -1,4 +1,8 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useCallback, useState, type Dispatch, type SetStateAction } from 'react'
+
+import type { EntryCorridorDefinition } from './entryCorridorGeometry'
+import { DEFAULT_ROUTE_SECTION, type RouteSectionDefinition } from './routeSections'
+import type { WaypointRouteResult } from './components/PlannedWaypointRoute'
 
 const TwoDView = lazy(() => import('./components/TwoDView').then(({ TwoDView }) => ({ default: TwoDView })))
 const ThreeDView = lazy(() => import('./components/ThreeDView').then(({ ThreeDView }) => ({ default: ThreeDView })))
@@ -7,6 +11,36 @@ type ViewMode = 'menu' | '2d' | '3d'
 
 export function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('menu')
+  const [routeSections, setRouteSections] = useState<RouteSectionDefinition[]>(() => [{
+    ...DEFAULT_ROUTE_SECTION,
+    corridor: { ...DEFAULT_ROUTE_SECTION.corridor },
+  }])
+  const [activeRouteSectionId, setActiveRouteSectionId] = useState(DEFAULT_ROUTE_SECTION.id)
+  const [plannedMissionDate, setPlannedMissionDate] = useState<string | null>(null)
+  const [plannedRoute, setPlannedRoute] = useState<WaypointRouteResult | null>(null)
+  const activeRouteSection = routeSections.find((section) => section.id === activeRouteSectionId) ?? routeSections[0]
+
+  const setEntryCorridor: Dispatch<SetStateAction<EntryCorridorDefinition>> = useCallback((action) => {
+    setRouteSections((current) => current.map((section) => {
+      if (section.id !== activeRouteSectionId) return section
+      const corridor = typeof action === 'function' ? action(section.corridor) : action
+      return { ...section, corridor }
+    }))
+  }, [activeRouteSectionId])
+
+  const updateRouteSections: Dispatch<SetStateAction<RouteSectionDefinition[]>> = useCallback((action) => {
+    setRouteSections(action)
+    setPlannedRoute(null)
+    setPlannedMissionDate(null)
+  }, [])
+
+  const setWaypointId: Dispatch<SetStateAction<string>> = useCallback((action) => {
+    setRouteSections((current) => current.map((section) => {
+      if (section.id !== activeRouteSectionId) return section
+      const targetId = typeof action === 'function' ? action(section.targetId) : action
+      return { ...section, targetId }
+    }))
+  }, [activeRouteSectionId])
 
   return (
     <main className="app-shell">
@@ -35,8 +69,8 @@ export function App() {
           <div className="choice-grid">
             <button className="choice-card choice-2d" type="button" onClick={() => setViewMode('2d')}>
               <span className="choice-number">01</span>
-              <strong>Matplotlib 2D</strong>
-              <span>Alle acht Planeten in einer klaren, datenbasierten Übersicht.</span>
+              <strong>Orbitalplaner 2D</strong>
+              <span>Zielkorridor zeichnen sowie reale Bahnverläufe von oben und entlang der Ekliptik prüfen.</span>
             </button>
             <button className="choice-card choice-3d" type="button" onClick={() => setViewMode('3d')}>
               <span className="choice-number">02</span>
@@ -47,7 +81,29 @@ export function App() {
         </section>
       ) : (
         <Suspense fallback={<div className="loading">Ansicht wird geladen …</div>}>
-          {viewMode === '2d' ? <TwoDView /> : <ThreeDView />}
+          {viewMode === '2d'
+            ? (
+              <TwoDView
+                routeSections={routeSections}
+                onRouteSectionsChange={updateRouteSections}
+                activeRouteSectionId={activeRouteSectionId}
+                onActiveRouteSectionChange={setActiveRouteSectionId}
+                plannedMissionDate={plannedMissionDate}
+                plannedRoute={plannedRoute}
+              />
+            )
+            : (
+              <ThreeDView
+                routeSections={routeSections}
+                entryCorridor={activeRouteSection.corridor}
+                onEntryCorridorChange={setEntryCorridor}
+                waypointId={activeRouteSection.targetId}
+                onWaypointChange={setWaypointId}
+                onPlannedMissionDateChange={setPlannedMissionDate}
+                plannedRoute={plannedRoute}
+                onPlannedRouteChange={setPlannedRoute}
+              />
+            )}
         </Suspense>
       )}
     </main>

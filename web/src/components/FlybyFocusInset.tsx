@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber'
 import { useMemo, useState } from 'react'
 import * as THREE from 'three'
 
+import { corridorArcs, type EntryCorridorDefinition } from '../entryCorridorGeometry'
 import { DraggableOverlayPanel } from './DraggableOverlayPanel'
 import type { WaypointRouteResult } from './PlannedWaypointRoute'
 
@@ -59,6 +60,21 @@ function FlybyGeometry({ route, elapsedDays, scaleMode }: FlybyFocusInsetProps &
         ? new THREE.Vector3(...geometry.aimpoint.relativePositionKm).length() - geometry.planetRadiusKm
         : 0.0
     )
+    const entryCorridor = route.entryCorridor?.enabled
+      ? route.entryCorridor
+      : null
+    const entryCorridorArcs = entryCorridor
+      ? corridorArcs(
+        entryCorridor as EntryCorridorDefinition,
+        geometry.sphereOfInfluenceRadiusKm,
+      ).map((arc) => arc.map((point) => localFromPlanet(
+        [point.x, point.y, point.z],
+        scale,
+      )))
+      : []
+    const selectedCorridorEntry = entryCorridor?.actualEntryDirection
+      ? localFromPlanet(entryCorridor.actualEntryDirection, geometry.sphereOfInfluenceRadiusKm * scale)
+      : null
 
     return {
       points,
@@ -76,8 +92,11 @@ function FlybyGeometry({ route, elapsedDays, scaleMode }: FlybyFocusInsetProps &
       aimpointHeightKm,
       aimpointRole: geometry.aimpoint?.role,
       aimpointWarning: geometry.aimpoint?.warning,
+      entryCorridor,
+      entryCorridorArcs,
+      selectedCorridorEntry,
     }
-  }, [elapsedDays, geometry, scaleMode])
+  }, [elapsedDays, geometry, route.entryCorridor, scaleMode])
 
   if (!focus || !geometry) return null
   return (
@@ -112,6 +131,20 @@ function FlybyGeometry({ route, elapsedDays, scaleMode }: FlybyFocusInsetProps &
         </Html>
       )}
       {focus.aimpointWarning && <Html center position={[0, focus.planetRadius + 0.25, 0]}><span className="flyby-focus-label route-warning">{focus.aimpointWarning}</span></Html>}
+      {scaleMode === 'soi' && focus.entryCorridorArcs.map((arc, index) => (
+        <Line key={`entry-corridor-${index}`} points={arc} color="#ffda67" lineWidth={2.4} transparent opacity={0.96} depthWrite={false} />
+      ))}
+      {scaleMode === 'soi' && focus.selectedCorridorEntry && (
+        <>
+          <mesh position={focus.selectedCorridorEntry}>
+            <sphereGeometry args={[0.085, 18, 18]} />
+            <meshStandardMaterial color={focus.entryCorridor?.entryInsideCorridor ? '#ffffff' : '#ff425f'} emissive="#67dcff" emissiveIntensity={0.65} />
+          </mesh>
+          <Html center position={focus.selectedCorridorEntry.clone().multiplyScalar(1.04)}>
+            <span className="flyby-focus-label">gewählter SOI-Eintritt</span>
+          </Html>
+        </>
+      )}
       {focus.probe && <mesh position={focus.probe}><octahedronGeometry args={[0.11, 1]} /><meshStandardMaterial color="#fff4b0" emissive="#ff8d3a" emissiveIntensity={1.1} /></mesh>}
     </group>
   )

@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 
-import { validateMissionConfig } from '../missionSimulation'
 import { applyPropulsionPreset, PROPULSION_PRESETS } from '../propulsionModels'
 import type { LaunchOptimizationResult } from '../launchOptimizer'
 import type {
@@ -80,26 +79,13 @@ interface ParameterPanelProps {
   draft: MissionConfig
   result: MissionResult | null
   elapsedDays: number
-  playing: boolean
   canPlay: boolean
-  playbackEndDay: number
-  simulationSpeed: number
-  stepDays: number
-  error: string | null
   energyDeficit?: LaunchOptimizationResult['solarEnergyFeasibility']
   onSelectPlanet: (planet: PlanetData) => void
   onSelectObject: (object: string) => void
   onSelectMoon: (moon: MoonData) => void
   onVisualChange: (visual: VisualConfig) => void
   onDraftChange: (config: MissionConfig) => void
-  onApply: () => void
-  onResetAll: () => void
-  onPlayingChange: (playing: boolean) => void
-  onElapsedDaysChange: (elapsedDays: number) => void
-  onSpeedChange: (speed: number) => void
-  onStepDaysChange: (days: number) => void
-  onStep: () => void
-  onResetTime: () => void
 }
 
 export function ParameterPanel({
@@ -114,30 +100,16 @@ export function ParameterPanel({
   draft,
   result,
   elapsedDays,
-  playing,
   canPlay,
-  playbackEndDay,
-  simulationSpeed,
-  stepDays,
-  error,
   energyDeficit,
   onSelectPlanet,
   onSelectObject,
   onSelectMoon,
   onVisualChange,
   onDraftChange,
-  onApply,
-  onResetAll,
-  onPlayingChange,
-  onElapsedDaysChange,
-  onSpeedChange,
-  onStepDaysChange,
-  onStep,
-  onResetTime,
 }: ParameterPanelProps) {
   const [moonSearch, setMoonSearch] = useState('')
   const [propulsionPresetId, setPropulsionPresetId] = useState('oberth-electric')
-  const validationErrors = validateMissionConfig(draft)
   const filteredMoons = useMemo(() => {
     const query = moonSearch.trim().toLocaleLowerCase('de-DE')
     return selectedMoons.filter((moon) => !query
@@ -191,15 +163,6 @@ export function ParameterPanel({
   const simulatedRadius = selectedPlanet
     ? selectedPlanet.radiusKm * visual.planetScale
     : 0
-
-  const savePreset = () => localStorage.setItem('solar-oberth-preset', JSON.stringify({ draft, visual }))
-  const loadPreset = () => {
-    const stored = localStorage.getItem('solar-oberth-preset')
-    if (!stored) return
-    const preset = JSON.parse(stored) as { draft: MissionConfig; visual: VisualConfig }
-    onDraftChange(preset.draft)
-    onVisualChange(preset.visual)
-  }
 
   return (
     <aside className="planet-panel parameter-panel" aria-label="Objekt- und Simulationsparameter">
@@ -311,19 +274,6 @@ export function ParameterPanel({
         <RangeField label="Körpergröße proportional" value={visual.planetScale} min={0.5} max={20} step={0.5} unit="× gemeinsam" onChange={(value) => updateVisual('planetScale', value)} />
         <RangeField label="Sondengröße" value={visual.probeScale} min={1} max={100} unit="×" onChange={(value) => updateVisual('probeScale', value)} />
         <RangeField label="Saturnringe" value={visual.saturnRingScale} min={0.5} max={3} step={0.1} unit="×" onChange={(value) => updateVisual('saturnRingScale', value)} />
-      </details>
-
-      <details>
-        <summary>Simulation</summary>
-        <div className="transport-controls">
-          <button type="button" disabled={!canPlay} onClick={() => onPlayingChange(!playing)}>{playing ? 'Pause' : 'Play'}</button>
-          <button type="button" disabled={!canPlay} onClick={onStep}>+ Schritt</button>
-          <button type="button" onClick={onResetTime}>Zeit zurück</button>
-        </div>
-        <label className="range-field"><span>Missionstag<output>{elapsedDays.toFixed(1)} / {playbackEndDay.toFixed(1)}</output></span><input type="range" min="0" max={Math.max(1, playbackEndDay)} step="0.1" value={Math.min(elapsedDays, Math.max(1, playbackEndDay))} disabled={!canPlay} onChange={(event) => onElapsedDaysChange(event.target.valueAsNumber)} /></label>
-        <RangeField label="Geschwindigkeit" value={simulationSpeed} min={0.1} max={365} step={0.1} unit="Tage/s" onChange={onSpeedChange} />
-        <label className="parameter-field"><span>Einzelschritt</span><select value={stepDays} onChange={(event) => onStepDaysChange(Number(event.target.value))}><option value="0.000694">1 Minute</option><option value="0.041667">1 Stunde</option><option value="1">1 Tag</option><option value="7">1 Woche</option><option value="30">1 Monat</option></select></label>
-        <label className="parameter-field"><span>Startdatum</span><input type="date" value={draft.startDate} onChange={(event) => updateMission('startDate', event.target.value)} /></label>
       </details>
 
       <details>
@@ -474,13 +424,6 @@ export function ParameterPanel({
         </ol>
       </details>}
 
-      {(error || validationErrors.length > 0) && <div className="validation-box" role="alert">{error ?? validationErrors.join(' ')}</div>}
-      <div className="panel-actions">
-        <button className="primary" type="button" disabled={validationErrors.length > 0} onClick={onApply}>{result ? 'Simulation aktualisieren' : 'Simulation starten'}</button>
-        <button type="button" onClick={onResetAll}>Alles zurücksetzen</button>
-        <button type="button" onClick={savePreset}>Preset speichern</button>
-        <button type="button" onClick={loadPreset}>Preset laden</button>
-      </div>
     </aside>
   )
 }

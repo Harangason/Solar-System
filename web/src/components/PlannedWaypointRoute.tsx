@@ -58,7 +58,7 @@ export interface WaypointRouteResult {
     waypointRelativePositionKm?: [number, number, number]
   }>
   segments?: Array<{
-    id: 'earth-to-oberth' | 'lambert-to-soi' | 'jupiter-hyperbola' | 'post-flyby'
+    id: string
     label: string
     startIndex: number
     endIndex: number
@@ -119,8 +119,81 @@ export interface WaypointRouteResult {
     }
   }
   outgoingDirection: [number, number, number]
+  entryCorridor?: {
+    enabled: boolean
+    surface: string
+    selectionStrategy: string
+    centerDirection: [number, number, number]
+    horizontalHalfAngleDeg: number
+    verticalHalfAngleDeg: number
+    rotationDeg: number
+    selectedDirection?: [number, number, number] | null
+    selectedHorizontalOffsetDeg?: number | null
+    selectedVerticalOffsetDeg?: number | null
+    evaluatedTargetCount: number
+    selectedRequiredInjectionDeltaVKmS?: number | null
+    actualEntryDirection: [number, number, number]
+    actualHorizontalOffsetDeg: number
+    actualVerticalOffsetDeg: number
+    actualEntryPositionKm: [number, number, number]
+    entryInsideCorridor: boolean
+  }
+  routeSections?: Array<{
+    id: string
+    originId: string
+    targetId: string
+    targetName: string
+    entryIndex: number
+    periapsisIndex: number
+    exitIndex: number
+    entryDay: number
+    periapsisDay: number
+    exitDay: number
+    entryPositionKm: [number, number, number]
+    entryDirection: [number, number, number]
+    entryLatitudeDeg: number
+    minimumAltitudeKm: number
+    requiredTransitionDeltaVKmS: number
+    corridorInsertionDeltaVKmS: number
+    entryVelocityPreserved?: boolean
+    lookaheadTargetId?: string | null
+    lookaheadAlignmentDeg?: number
+    selectedBPlaneClockDeg?: number
+    predictedPassiveTurnDeg?: number
+    corridor: {
+      enabled: boolean
+      entryInsideCorridor: boolean
+    }
+  }>
+  highFidelityNBody?: {
+    enabled: boolean
+    converged: boolean
+    collision?: boolean
+    forceModel?: string
+    differentialCorrection?: {
+      correctionMagnitudeKmS: number
+      entryPositionResidualKm: number
+      entryVelocityResidualKmS: number
+      requiredDepartureDeltaVKmS?: number
+      feasibleWithConfiguredBurn?: boolean
+    }
+    flyby?: {
+      periapsisDay: number
+      periapsisRadiusKm: number
+      periapsisAltitudeKm: number
+      turnAngleDeg: number
+      exitPositionResidualToPatchedConicKm: number
+      exitVelocityResidualToPatchedConicKmS: number
+    }
+    trajectory: Array<{
+      elapsedDays: number
+      positionKm: [number, number, number]
+      velocityKmS: [number, number, number]
+    }>
+  }
   flybyGeometry?: {
     curveModel?: string
+    targetingMode?: string
     sampleCount?: number
     stateContinuousWithinFlyby?: boolean
     separateTargetImpulseAtSoiExit?: boolean
@@ -169,7 +242,7 @@ export interface WaypointRouteResult {
     }>
   }
   summary: {
-    flybyMode: 'acceleration' | 'observation'
+    flybyMode: 'acceleration' | 'observation' | 'multi-section'
     requiredInjectionDeltaVKmS: number
     availableInjectionDeltaVKmS?: number
     solarDepartureInjectionApplied?: boolean
@@ -198,6 +271,11 @@ export interface WaypointRouteResult {
     observationWindowHours: number
     targetAlignmentDeg: number
     feasibleWithConfiguredBurn: boolean
+    highFidelityNBodyConverged?: boolean
+    highFidelityNBodyCollision?: boolean
+    highFidelityRequiredDepartureDeltaVKmS?: number
+    entryCorridorTargeted?: boolean
+    entryInsideCorridor?: boolean
     warnings?: string[]
     model: string
   }
@@ -229,6 +307,12 @@ export function PlannedWaypointRoute({ route, orbitScale, inclinationScale, elap
   const physicalPoints = useMemo(
     () => route.trajectory.map((point) => scenePosition(point.positionKm, orbitScale, inclinationScale)),
     [inclinationScale, orbitScale, route],
+  )
+  const continuousNBodyPoints = useMemo(
+    () => route.highFidelityNBody?.trajectory.map(
+      (point) => scenePosition(point.positionKm, orbitScale, inclinationScale),
+    ) ?? [],
+    [inclinationScale, orbitScale, route.highFidelityNBody],
   )
   const waypoint = scenePosition(route.waypoint.positionKm, orbitScale, inclinationScale)
   const waypointIndex = route.waypoint.trajectoryIndex ?? route.trajectory.findIndex((point) => point.elapsedDays >= route.waypoint.encounterDay)
@@ -355,8 +439,59 @@ export function PlannedWaypointRoute({ route, orbitScale, inclinationScale, elap
           </Billboard>
         </group>
       )}
-      <Line points={points} color={homogeneousRouteColor} lineWidth={2.45} dashed={!departureFeasible} dashSize={0.2} gapSize={0.11} transparent opacity={departureFeasible ? 0.97 : 0.8} />
+      <Line points={points} color={homogeneousRouteColor} lineWidth={2.45} dashed={!departureFeasible || continuousNBodyPoints.length > 1} dashSize={0.2} gapSize={0.11} transparent opacity={continuousNBodyPoints.length > 1 ? 0.34 : departureFeasible ? 0.97 : 0.8} />
+      {continuousNBodyPoints.length > 1 && (
+        <Line
+          points={continuousNBodyPoints}
+          color={route.highFidelityNBody?.collision ? '#ff425f' : route.highFidelityNBody?.converged ? '#a6ff63' : '#ffb347'}
+          lineWidth={2.8}
+          transparent
+          opacity={0.98}
+        />
+      )}
       {routeProbePosition && <mesh position={routeProbePosition}><octahedronGeometry args={[Math.max(0.045, 0.018 * probeScale), 1]} /><meshStandardMaterial color="#fff4b0" emissive="#ff8d3a" emissiveIntensity={1.35} /></mesh>}
+      {route.routeSections?.map((section, index) => {
+        const entry = points[section.entryIndex]
+        const periapsis = points[section.periapsisIndex]
+        const exit = points[section.exitIndex]
+        const followingTargetName = route.routeSections?.[index + 1]?.targetName
+        if (!entry || !periapsis || !exit) return null
+        return (
+          <group key={`calculated-section-${section.id}`}>
+            <mesh position={entry}>
+              <sphereGeometry args={[0.032, 14, 14]} />
+              <meshStandardMaterial color="#65ddff" emissive="#159bc8" emissiveIntensity={0.8} />
+            </mesh>
+            <mesh position={periapsis}>
+              <sphereGeometry args={[0.035, 14, 14]} />
+              <meshStandardMaterial color="#ffe171" emissive="#e8901d" emissiveIntensity={0.9} />
+            </mesh>
+            <mesh position={exit}>
+              <sphereGeometry args={[0.032, 14, 14]} />
+              <meshStandardMaterial color="#65ff9a" emissive="#19bd62" emissiveIntensity={0.8} />
+            </mesh>
+            <Html center position={entry.clone().add(new THREE.Vector3(0, 0.18 + index * 0.035, 0))}>
+              <span className="route-section-state-label">
+                <strong>{String(index + 1).padStart(2, '0')} · {section.targetName}-Eintritt</strong>
+                <small>
+                  Breite {section.entryLatitudeDeg >= 0 ? '+' : ''}{section.entryLatitudeDeg.toFixed(1)}° ·
+                  Korridor {section.corridor.entryInsideCorridor ? 'getroffen' : 'verfehlt'}
+                </small>
+                <small>
+                  Übergang Δv {section.requiredTransitionDeltaVKmS.toFixed(2)} km/s ·
+                  Einschuss {section.corridorInsertionDeltaVKmS.toFixed(2)} km/s
+                </small>
+                {followingTargetName && (
+                  <small>
+                    Fly-by auf {followingTargetName} vorausgerichtet ·
+                    Restwinkel {(section.lookaheadAlignmentDeg ?? 0).toFixed(1)}°
+                  </small>
+                )}
+              </span>
+            </Html>
+          </group>
+        )
+      })}
       {showNavigationGuide && targetPosition && (
         <Line points={[points[0], waypoint, targetPosition]} color="#8be8ff" lineWidth={1.15} dashed dashSize={1.0} gapSize={0.55} transparent opacity={0.9} depthWrite={false} />
       )}
@@ -388,6 +523,19 @@ export function PlannedWaypointRoute({ route, orbitScale, inclinationScale, elap
               </small>
             )}
             {route.flybyGeometry?.aimpoint?.warning && <small>{route.flybyGeometry.aimpoint.warning}</small>}
+            {route.entryCorridor?.enabled && (
+              <small>
+                SOI-Korridor {route.entryCorridor.entryInsideCorridor ? 'getroffen' : 'verfehlt'} ·
+                Zielversatz {route.entryCorridor.actualHorizontalOffsetDeg.toFixed(1)}° /
+                {route.entryCorridor.actualVerticalOffsetDeg.toFixed(1)}° ·
+                {route.entryCorridor.evaluatedTargetCount} Zielpunkte bewertet
+              </small>
+            )}
+            {route.highFidelityNBody?.enabled && route.highFidelityNBody.flyby && (
+              <small>
+                N-Körper {route.highFidelityNBody.converged ? 'konvergiert' : 'nicht konvergiert'} · tatsächliche Höhe {route.highFidelityNBody.flyby.periapsisAltitudeKm.toLocaleString('de-DE', { maximumFractionDigits: 0 })} km · Abflugkorrektur {(route.highFidelityNBody.differentialCorrection?.correctionMagnitudeKmS ?? 0).toFixed(3)} km/s
+              </small>
+            )}
             {route.summary.warnings?.length ? <small>{route.summary.warnings[0]}</small> : null}
           </span>
         </DraggableInfoLabel>
