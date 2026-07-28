@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+data/*.db
+data/*.db-*
+logs/*.jsonl
+server.log
+server-error.log

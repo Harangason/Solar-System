@@ -70,6 +70,7 @@ interface RoutePlanPreviewProps {
   transformMode: RouteTransformMode
   selection: RouteSketchSelection
   editable: boolean
+  onFocusWaypoint: () => void
   onSketchChange: (sketch: RouteSketch, recordHistory?: boolean) => void
   onSelectionChange: (selection: RouteSketchSelection) => void
   onEditingChange: (editing: boolean) => void
@@ -513,6 +514,7 @@ export function RoutePlanPreview({
   transformMode,
   selection,
   editable,
+  onFocusWaypoint,
   onSketchChange,
   onSelectionChange,
   onEditingChange,
@@ -681,7 +683,15 @@ export function RoutePlanPreview({
         />
       ))}
 
-      <group position={waypoint} onPointerEnter={() => setEncounterHovered(true)} onPointerLeave={() => setEncounterHovered(false)}>
+      <group
+        position={waypoint}
+        onClick={(event) => {
+          event.stopPropagation()
+          onFocusWaypoint()
+        }}
+        onPointerEnter={() => setEncounterHovered(true)}
+        onPointerLeave={() => setEncounterHovered(false)}
+      >
         <mesh>
           <sphereGeometry args={[encounterDisplayRadius, 48, 48]} />
           <meshStandardMaterial map={waypointTexture} color="#ffffff" emissive={waypointColor} emissiveIntensity={0.08} roughness={0.9} />
@@ -691,7 +701,7 @@ export function RoutePlanPreview({
           <meshBasicMaterial color="#79e4ff" wireframe transparent opacity={0.35} depthWrite={false} />
         </mesh>
         {encounterHovered && <Html center position={[encounterDisplayRadius + 0.55, encounterDisplayRadius + 0.28, 0]}>
-          <span className="encounter-anchor-tooltip">{waypointName} · {encounterDate} · Tag {encounterDay.toFixed(1)}</span>
+          <span className="encounter-anchor-tooltip">{waypointName} · {encounterDate} · Tag {encounterDay.toFixed(1)} · anklicken zum Fokussieren</span>
         </Html>}
       </group>
 

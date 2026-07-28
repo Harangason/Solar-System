@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import random
 from datetime import datetime, timedelta
-from math import acosh, acos, asin, atan2, cos, cosh, pi, sin, sinh, sqrt
+from math import acosh, acos, asin, atan2, cos, cosh, pi, sin, sinh, sqrt, tan
 
 from scipy import constants
 from scipy.integrate import solve_ivp
 from scipy.optimize import minimize
 
 from calculation_audit import write_route_audit
+from nbody_propagation import validate_continuous_waypoint_route
 from trajectory import (
     AU_KM,
     DAY_SECONDS,
@@ -23,6 +24,7 @@ from trajectory import (
     _mission_epoch_days,
     _normalize,
     _planet_position_at,
+    _planet_state_at,
     _rk4,
     simulate_mission,
 )
@@ -46,6 +48,146 @@ def _cross(first: tuple, second: tuple) -> tuple:
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
+
+
+def _corridor_basis(center_direction: tuple, rotation_deg: float) -> tuple[tuple, tuple]:
+    """Return rotated tangent axes for a planet-centred spherical corridor."""
+    center = _normalize(center_direction)
+    reference = (0.0, 0.0, 1.0) if abs(_dot(center, (0.0, 0.0, 1.0))) < 0.9 else (0.0, 1.0, 0.0)
+    right = _normalize(_cross(reference, center))
+    up = _normalize(_cross(center, right))
+    rotation = rotation_deg * pi / 180.0
+    return (
+        _normalize(tuple(
+            right[index] * cos(rotation) + up[index] * sin(rotation)
+            for index in range(3)
+        )),
+        _normalize(tuple(
+            -right[index] * sin(rotation) + up[index] * cos(rotation)
+            for index in range(3)
+        )),
+    )
+
+
+def _corridor_direction(
+    center_direction: tuple,
+    horizontal_offset_deg: float,
+    vertical_offset_deg: float,
+    rotation_deg: float = 0.0,
+) -> tuple:
+    """Map gnomonic angular offsets onto the unit sphere."""
+    center = _normalize(center_direction)
+    right, up = _corridor_basis(center, rotation_deg)
+    horizontal = tan(horizontal_offset_deg * pi / 180.0)
+    vertical = tan(vertical_offset_deg * pi / 180.0)
+    return _normalize(tuple(
+        center[index] + right[index] * horizontal + up[index] * vertical
+        for index in range(3)
+    ))
+
+
+def _corridor_coordinates_deg(
+    direction: tuple,
+    center_direction: tuple,
+    rotation_deg: float = 0.0,
+) -> tuple[float, float]:
+    """Return gnomonic horizontal and vertical offsets from corridor centre."""
+    center = _normalize(center_direction)
+    candidate = _normalize(direction)
+    right, up = _corridor_basis(center, rotation_deg)
+    forward = _dot(candidate, center)
+    if forward <= 0.0:
+        return 180.0, 180.0
+    return (
+        atan2(_dot(candidate, right), forward) * 180.0 / pi,
+        atan2(_dot(candidate, up), forward) * 180.0 / pi,
+    )
+
+
+def _parse_entry_corridor(values: dict) -> dict:
+    enabled = values.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("entryCorridor.enabled muss ein boolescher Wert sein.")
+    blocked = values.get("blocked", False)
+    if not isinstance(blocked, bool):
+        raise ValueError("entryCorridor.blocked muss ein boolescher Wert sein.")
+    if enabled and blocked:
+        raw_reasons = values.get("blockReasons") or ()
+        reasons = raw_reasons if isinstance(raw_reasons, (list, tuple)) else ()
+        detail = " ".join(str(reason) for reason in reasons if reason)
+        suffix = f" {detail}" if detail else ""
+        raise ValueError(f"Zielkorridor ist gesperrt.{suffix}")
+    raw_center = values.get("centerDirection") or (1.0, 0.0, 0.0)
+    if not isinstance(raw_center, (list, tuple)) or len(raw_center) != 3:
+        raise ValueError("entryCorridor.centerDirection muss drei Komponenten besitzen.")
+    center = _normalize(tuple(float(component) for component in raw_center))
+    if _magnitude(center) == 0.0:
+        raise ValueError("Der Mittelpunkt des Eintrittskorridors darf kein Nullvektor sein.")
+    horizontal = float(values.get("horizontalHalfAngleDeg", 8.0))
+    vertical = float(values.get("verticalHalfAngleDeg", 5.0))
+    rotation = float(values.get("rotationDeg", 0.0))
+    if not 0.1 <= horizontal <= 80.0 or not 0.1 <= vertical <= 80.0:
+        raise ValueError("Die Korridor-Halbwinkel müssen zwischen 0,1° und 80° liegen.")
+    return {
+        "enabled": enabled,
+        "centerDirection": center,
+        "horizontalHalfAngleDeg": horizontal,
+        "verticalHalfAngleDeg": vertical,
+        "rotationDeg": rotation,
+    }
+
+
+def _select_entry_corridor_target(
+    corridor: dict,
+    *,
+    burn_position: tuple,
+    reference_velocity: tuple,
+    planet_position: tuple,
+    sphere_of_influence_km: float,
+    flight_seconds: float,
+) -> dict:
+    """Select the lowest-injection Lambert target from a 3x3 corridor grid."""
+    horizontal_limit = corridor["horizontalHalfAngleDeg"]
+    vertical_limit = corridor["verticalHalfAngleDeg"]
+    candidates = []
+    for horizontal_factor in (-1.0, 0.0, 1.0):
+        for vertical_factor in (-1.0, 0.0, 1.0):
+            horizontal = horizontal_factor * horizontal_limit
+            vertical = vertical_factor * vertical_limit
+            direction = _corridor_direction(
+                corridor["centerDirection"],
+                horizontal,
+                vertical,
+                corridor["rotationDeg"],
+            )
+            position = _add(
+                planet_position,
+                tuple(component * sphere_of_influence_km for component in direction),
+            )
+            try:
+                departure, _, diagnostics = _select_lambert(
+                    burn_position,
+                    position,
+                    flight_seconds,
+                    reference_velocity,
+                )
+            except ValueError:
+                continue
+            candidates.append({
+                "direction": direction,
+                "position": position,
+                "horizontalOffsetDeg": horizontal,
+                "verticalOffsetDeg": vertical,
+                "requiredInjectionDeltaVKmS": _magnitude(
+                    _subtract(departure, reference_velocity)
+                ),
+                "lambertCandidateCount": diagnostics["candidateCount"],
+            })
+    if not candidates:
+        raise ValueError("Kein Lambert-Zielpunkt innerhalb des Eintrittskorridors ist erreichbar.")
+    selected = min(candidates, key=lambda candidate: candidate["requiredInjectionDeltaVKmS"])
+    selected["evaluatedTargetCount"] = len(candidates)
+    return selected
 
 
 def _aimpoint_direction_from_clock(
@@ -165,7 +307,12 @@ def _stumpff_s(z: float) -> float:
     return 1 / 6
 
 
-def _lambert_candidates(start: tuple, end: tuple, flight_seconds: float) -> list[dict]:
+def _lambert_candidates(
+    start: tuple,
+    end: tuple,
+    flight_seconds: float,
+    gravitational_parameter: float = MU_SUN,
+) -> list[dict]:
     """Return zero-revolution Lambert solutions for both transfer sides."""
     start_radius, end_radius = _magnitude(start), _magnitude(end)
     cosine = max(-1.0, min(1.0, _dot(start, end) / (start_radius * end_radius)))
@@ -187,7 +334,7 @@ def _lambert_candidates(start: tuple, end: tuple, flight_seconds: float) -> list
             if y_value <= 0:
                 return None
             calculated = (y_value / c_value) ** 1.5 * s_value + parameter_a * sqrt(y_value)
-            return calculated - sqrt(MU_SUN) * flight_seconds
+            return calculated - sqrt(gravitational_parameter) * flight_seconds
 
         previous: tuple[float, float] | None = None
         brackets: list[tuple[tuple[float, float], tuple[float, float]]] = []
@@ -224,7 +371,7 @@ def _lambert_candidates(start: tuple, end: tuple, flight_seconds: float) -> list
             c_value, s_value = _stumpff_c(z_value), _stumpff_s(z_value)
             y_value = start_radius + end_radius + parameter_a * (z_value * s_value - 1) / sqrt(c_value)
             f_value = 1 - y_value / start_radius
-            g_value = parameter_a * sqrt(y_value / MU_SUN)
+            g_value = parameter_a * sqrt(y_value / gravitational_parameter)
             if abs(g_value) < 1e-12:
                 continue
             g_dot = 1 - y_value / end_radius
@@ -276,6 +423,7 @@ def _propagate_lambert_segment(
     start_day: float,
     flight_seconds: float,
     sample_count: int,
+    gravitational_parameter: float = MU_SUN,
 ) -> tuple[list[dict], tuple, tuple]:
     """Adaptively propagate the heliocentric Lambert arc for display and audit."""
     initial_state = [*start_position, *start_velocity]
@@ -283,7 +431,7 @@ def _propagate_lambert_segment(
     def derivative(_time: float, state) -> list[float]:
         position = state[:3]
         radius = sqrt(sum(component * component for component in position))
-        acceleration_factor = -MU_SUN / max(radius**3, 1e-18)
+        acceleration_factor = -gravitational_parameter / max(radius**3, 1e-18)
         return [
             state[3], state[4], state[5],
             position[0] * acceleration_factor,
@@ -620,10 +768,10 @@ def _align_hyperbola_entry_velocity(
     correction_axis = _cross(calculated_direction, required_direction)
     if correction_angle < 1e-14 or _magnitude(correction_axis) < 1e-14:
         return axis_x, axis_y
-        return (
-            _normalize(_rotate_about_axis(axis_x, correction_axis, correction_angle)),
-            _normalize(_rotate_about_axis(axis_y, correction_axis, correction_angle)),
-        )
+    return (
+        _normalize(_rotate_about_axis(axis_x, correction_axis, correction_angle)),
+        _normalize(_rotate_about_axis(axis_y, correction_axis, correction_angle)),
+    )
 
 
 def _select_flyby_outgoing(
@@ -688,10 +836,7 @@ def _select_flyby_outgoing(
 
 
 def _planet_velocity(ephemeris: tuple, days_j2000: float) -> tuple:
-    delta_days = 60.0 / DAY_SECONDS
-    before = _planet_position_at(ephemeris, days_j2000 - delta_days)
-    after = _planet_position_at(ephemeris, days_j2000 + delta_days)
-    return tuple((after[index] - before[index]) / 120.0 for index in range(3))
+    return _planet_state_at(ephemeris, days_j2000)[1]
 
 
 def _route_uncertainty(trajectory: list[dict], config, waypoint_id: str) -> dict:
@@ -984,7 +1129,12 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
     periapsis_day = float(values.get("encounterDay", 730.0))
     altitude_km = float(values.get("flybyAltitudeKm", 100_000.0))
     flyby_mode = str(values.get("flybyMode") or "acceleration")
+    high_fidelity_raw = values.get("highFidelityNBody", False)
+    if not isinstance(high_fidelity_raw, bool):
+        raise ValueError("highFidelityNBody muss ein boolescher Wert sein.")
+    high_fidelity_n_body = high_fidelity_raw
     aimpoint_values = values.get("flybyAimpoint") or {}
+    entry_corridor = _parse_entry_corridor(values.get("entryCorridor") or {})
 
     aimpoint_enabled = bool(aimpoint_values.get("enabled", False))
     aimpoint_clock_deg = float(aimpoint_values.get("clockAngleDeg", 0.0))
@@ -1008,6 +1158,11 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
         raise ValueError("Die Vorbeiflughöhe muss positiv sein.")
     if aimpoint_enabled and aimpoint_altitude_km < 0:
         raise ValueError("Die Aimpoint-Höhe muss nicht-negativ sein.")
+    if aimpoint_enabled and entry_corridor["enabled"]:
+        raise ValueError(
+            "Ein einzelner Flyby-Aimpoint und ein Eintrittskorridor können "
+            "nicht gleichzeitig aktiv sein."
+        )
 
     radius_km = planet_row[3] / 1_000
     minimum_periapsis_radius = radius_km + altitude_km
@@ -1054,7 +1209,21 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
     ))
 
     entry_day = periapsis_day
-    entry_position = _planet_position_at(ephemeris, epoch_days + entry_day)
+    corridor_selection = None
+    selected_corridor_direction = None
+    if entry_corridor["enabled"]:
+        corridor_selection = _select_entry_corridor_target(
+            entry_corridor,
+            burn_position=burn_point.position_km,
+            reference_velocity=burn_point.velocity_km_s,
+            planet_position=_planet_position_at(ephemeris, epoch_days + entry_day),
+            sphere_of_influence_km=sphere_of_influence_km,
+            flight_seconds=(entry_day - burn_point.elapsed_days) * DAY_SECONDS,
+        )
+        selected_corridor_direction = corridor_selection["direction"]
+        entry_position = corridor_selection["position"]
+    else:
+        entry_position = _planet_position_at(ephemeris, epoch_days + entry_day)
     departure_velocity = burn_point.velocity_km_s
     arrival_velocity = burn_point.velocity_km_s
     outgoing_excess = (0.0, 0.0, 0.0)
@@ -1115,6 +1284,16 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
             planet_mu,
             incoming_direction,
         )
+        if selected_corridor_direction is not None:
+            axis_x, axis_y = _align_hyperbola_aimpoint(
+                axis_x,
+                axis_y,
+                -hyperbolic_limit,
+                semi_major_axis,
+                eccentricity,
+                planet_mu,
+                selected_corridor_direction,
+            )
         _, _, estimated_exit_seconds = _hyperbola_relative_state(
             hyperbolic_limit, semi_major_axis, eccentricity, planet_mu, axis_x, axis_y,
         )
@@ -1178,6 +1357,16 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
         planet_mu,
         incoming_direction,
     )
+    if selected_corridor_direction is not None:
+        axis_x, axis_y = _align_hyperbola_aimpoint(
+            axis_x,
+            axis_y,
+            -hyperbolic_limit,
+            semi_major_axis,
+            eccentricity,
+            planet_mu,
+            selected_corridor_direction,
+        )
     if aimpoint_enabled and desired_periapsis_direction is not None:
         aimpoint_anomaly = (
             -hyperbolic_limit
@@ -1480,6 +1669,58 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
     target_alignment = target_asymptote_alignment
     course_change = acos(max(-1.0, min(1.0, _dot(_normalize(arrival_velocity), _normalize(exit_velocity)))))
     entry_relative_position = tuple(relative_hyperbola_points[0]["positionKm"])
+    actual_entry_direction = _normalize(entry_relative_position)
+    corridor_horizontal_deg, corridor_vertical_deg = _corridor_coordinates_deg(
+        actual_entry_direction,
+        entry_corridor["centerDirection"],
+        entry_corridor["rotationDeg"],
+    )
+    entry_inside_corridor = (
+        not entry_corridor["enabled"]
+        or (
+            abs(corridor_horizontal_deg) <= entry_corridor["horizontalHalfAngleDeg"] + 1e-6
+            and abs(corridor_vertical_deg) <= entry_corridor["verticalHalfAngleDeg"] + 1e-6
+        )
+    )
+    entry_corridor_payload = {
+        "enabled": entry_corridor["enabled"],
+        "surface": "planetary sphere of influence",
+        "selectionStrategy": "minimum departure injection delta-v on a 3x3 angular grid",
+        "centerDirection": list(entry_corridor["centerDirection"]),
+        "horizontalHalfAngleDeg": entry_corridor["horizontalHalfAngleDeg"],
+        "verticalHalfAngleDeg": entry_corridor["verticalHalfAngleDeg"],
+        "rotationDeg": entry_corridor["rotationDeg"],
+        "selectedDirection": (
+            list(selected_corridor_direction)
+            if selected_corridor_direction is not None
+            else None
+        ),
+        "selectedHorizontalOffsetDeg": (
+            corridor_selection["horizontalOffsetDeg"]
+            if corridor_selection is not None
+            else None
+        ),
+        "selectedVerticalOffsetDeg": (
+            corridor_selection["verticalOffsetDeg"]
+            if corridor_selection is not None
+            else None
+        ),
+        "evaluatedTargetCount": (
+            corridor_selection["evaluatedTargetCount"]
+            if corridor_selection is not None
+            else 0
+        ),
+        "selectedRequiredInjectionDeltaVKmS": (
+            corridor_selection["requiredInjectionDeltaVKmS"]
+            if corridor_selection is not None
+            else None
+        ),
+        "actualEntryDirection": list(actual_entry_direction),
+        "actualHorizontalOffsetDeg": corridor_horizontal_deg,
+        "actualVerticalOffsetDeg": corridor_vertical_deg,
+        "actualEntryPositionKm": list(hyperbola_entry_position),
+        "entryInsideCorridor": entry_inside_corridor,
+    }
     periapsis_relative_position = tuple(value * periapsis_radius for value in axis_x)
     flyby_plane_normal = _normalize(_cross(incoming_direction, outgoing_direction_relative))
 
@@ -1510,11 +1751,16 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
     ):
         aimpoint_warning = "Gewählter Aimpoint ist mit aktueller Flyby-Geometrie nicht erreichbar."
     payload_warnings = [aimpoint_warning] if aimpoint_warning else []
+    if entry_corridor["enabled"] and not entry_inside_corridor:
+        payload_warnings.append(
+            "Der berechnete SOI-Eintritt liegt außerhalb des definierten Korridors."
+        )
 
     payload = {
         "startDate": result.config.start_date,
         "totalFlightDays": trajectory[-1]["elapsedDays"],
         "warnings": payload_warnings,
+        "entryCorridor": entry_corridor_payload,
         "solarBoundary": {
             "definition": "outbound osculating speed at 1 AU",
             "radiusAu": 1.0,
@@ -1711,6 +1957,8 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
             "periapsisSpeedKmS": periapsis_speed,
             "observationWindowHours": observation_window_hours,
             "targetAlignmentDeg": target_alignment * 180 / pi,
+            "entryCorridorTargeted": entry_corridor["enabled"],
+            "entryInsideCorridor": entry_inside_corridor,
             "feasibleWithConfiguredBurn": (
                 injection_delta_v <= available_oberth_delta_v
                 and target_correction_delta_v <= available_oberth_delta_v
@@ -1718,12 +1966,74 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
                 and actual_target_alignment is not None
                 and actual_target_alignment <= 0.01 * pi / 180
                 and target_progress_monotonic
+                and entry_inside_corridor
             ),
             "warnings": payload_warnings,
             "stateContinuity": "position exact at both SOI boundaries; velocity residual reported at model switch",
             "model": "Bidirectional boundary matching: forward Lambert + backward target asymptote + B-plane hyperbola",
         },
     }
+    payload["highFidelityNBody"] = {
+        "enabled": high_fidelity_n_body,
+        "converged": False,
+        "trajectory": [],
+    }
+    if high_fidelity_n_body:
+        target_impulse = (
+            _subtract(exit_velocity, gravity_exit_velocity)
+            if target_injection_applied
+            else (0.0, 0.0, 0.0)
+        )
+        continuous_validation = validate_continuous_waypoint_route(
+            epoch_days_j2000=epoch_days,
+            burn_day=burn_point.elapsed_days,
+            burn_position_km=burn_point.position_km,
+            reference_departure_velocity_km_s=departure_velocity,
+            entry_day=entry_day,
+            reference_entry_position_km=hyperbola_entry_position,
+            reference_entry_velocity_km_s=hyperbola_entry_velocity,
+            exit_day=exit_day,
+            reference_exit_position_km=exit_position,
+            reference_gravity_exit_velocity_km_s=gravity_exit_velocity,
+            target_impulse_km_s=target_impulse,
+            outbound_end_day=float(post_flyby_trajectory[-1]["elapsedDays"]),
+            waypoint_ephemeris=ephemeris,
+            waypoint_radius_km=radius_km,
+        )
+        corrected_departure_velocity = tuple(
+            continuous_validation["differentialCorrection"][
+                "correctedDepartureVelocityKmS"
+            ]
+        )
+        continuous_required_delta_v = _magnitude(
+            _subtract(corrected_departure_velocity, pre_burn_velocity)
+        )
+        continuous_validation["differentialCorrection"][
+            "requiredDepartureDeltaVKmS"
+        ] = continuous_required_delta_v
+        continuous_validation["differentialCorrection"][
+            "feasibleWithConfiguredBurn"
+        ] = continuous_required_delta_v <= available_oberth_delta_v
+        payload["highFidelityNBody"] = continuous_validation
+        payload["summary"]["highFidelityNBodyConverged"] = continuous_validation[
+            "converged"
+        ]
+        payload["summary"]["highFidelityNBodyCollision"] = continuous_validation[
+            "collision"
+        ]
+        payload["summary"][
+            "highFidelityRequiredDepartureDeltaVKmS"
+        ] = continuous_required_delta_v
+        if not continuous_validation["converged"]:
+            payload_warnings.append(
+                "Die differentielle Korrektur der kontinuierlichen "
+                "N-Körper-Bahn hat die Eintrittstoleranz nicht erreicht."
+            )
+        if continuous_validation["collision"]:
+            payload_warnings.append(
+                "Die kontinuierliche N-Körper-Bahn schneidet den Planetenkörper."
+            )
+
     position_gaps = [
         {"fromSegment": left_id, "toSegment": right_id, "gapKm": _magnitude(_subtract(
             tuple(trajectory[right_index]["positionKm"]),
@@ -1748,6 +2058,11 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
             "targetRightAscensionDeg": target_ra * 180 / pi,
             "targetDeclinationDeg": target_dec * 180 / pi,
             "flybyAimpoint": aimpoint_values,
+            "entryCorridor": {
+                **entry_corridor,
+                "centerDirection": list(entry_corridor["centerDirection"]),
+            },
+            "highFidelityNBody": high_fidelity_n_body,
             "manualVisualRouteSketch": values.get("routeSketch"),
             "manualSketchAffectsDynamics": False,
         },
@@ -1835,6 +2150,15 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
                 else []
             ),
         },
+        "continuousNBody": (
+            {
+                key: value
+                for key, value in payload["highFidelityNBody"].items()
+                if key != "trajectory"
+            }
+            if high_fidelity_n_body
+            else {"enabled": False}
+        ),
         "validation": {
             "collisionFree": periapsis_radius > radius_km,
             "minimumAltitudeRespected": periapsis_radius >= minimum_periapsis_radius,
@@ -1844,6 +2168,7 @@ def simulate_waypoint_route(values: dict | None, include_mission_result: bool = 
             "actualTargetToleranceReached": actual_target_alignment is not None and actual_target_alignment * 180 / pi <= 0.01,
             "desiredSolarExitSpeedReached": solar_speed_boundary_reached,
             "postFlybyNeverMovesAwayFromTarget": target_progress_monotonic,
+            "entryInsideCorridor": entry_inside_corridor,
             "routeFeasibleWithConfiguredPropulsion": payload["summary"]["feasibleWithConfiguredBurn"],
         },
     })

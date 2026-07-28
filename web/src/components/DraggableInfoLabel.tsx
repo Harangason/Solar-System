@@ -112,6 +112,11 @@ export function DraggableInfoLabel({ children, initialOffset = [36, -90], label,
 
   const beginDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
+    const target = event.target as HTMLElement
+    if (target.closest('button, summary, input, select, textarea, a, [data-no-drag]')) {
+      event.stopPropagation()
+      return
+    }
     event.preventDefault()
     event.stopPropagation()
     event.currentTarget.setPointerCapture(event.pointerId)

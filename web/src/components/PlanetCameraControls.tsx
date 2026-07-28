@@ -4,9 +4,27 @@ import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 
+type SystemCameraView = 'perspective' | 'top' | 'front' | 'side'
+export type FocusedCameraView = SystemCameraView | 'sun-behind' | 'cross-axis'
+
 export type CameraFocusRequest =
-  | { kind: 'overview'; view: 'perspective' | 'top' | 'front' | 'side'; requestId: number }
-  | { kind: 'planet'; planetId: string; requestId: number }
+  | { kind: 'overview'; view: SystemCameraView; requestId: number }
+  | {
+      kind: 'planet'
+      planetId: string
+      requestId: number
+      view?: FocusedCameraView
+      preserveDistance?: boolean
+    }
+  | {
+      kind: 'point'
+      label: string
+      position: [number, number, number]
+      radius: number
+      requestId: number
+      view?: FocusedCameraView
+      preserveDistance?: boolean
+    }
 
 interface PlanetCameraControlsProps {
   request: CameraFocusRequest
@@ -22,6 +40,33 @@ const OVERVIEW_POSITIONS = {
   front: new THREE.Vector3(0, 0, 78),
   side: new THREE.Vector3(78, 0, 0),
 } as const
+
+const FOCUSED_VIEW_DIRECTIONS = {
+  perspective: new THREE.Vector3(1, 0.65, 1).normalize(),
+  top: new THREE.Vector3(0, 1, 0),
+  front: new THREE.Vector3(0, 0, 1),
+  side: new THREE.Vector3(1, 0, 0),
+} as const
+
+function getFocusedViewDirection(view: FocusedCameraView, focusPosition: THREE.Vector3) {
+  if (view in FOCUSED_VIEW_DIRECTIONS) {
+    return FOCUSED_VIEW_DIRECTIONS[view as SystemCameraView].clone()
+  }
+
+  // Radial axis: Sun (scene origin) -> focused object. From farther out on
+  // this axis the Sun is behind the selected planet. The cross view is
+  // constructed exactly perpendicular to the same axis.
+  const radialDirection = focusPosition.clone()
+  if (radialDirection.lengthSq() < 1e-8) radialDirection.set(1, 0, 0)
+  radialDirection.normalize()
+  if (view === 'sun-behind') return radialDirection
+
+  const crossAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), radialDirection)
+  if (crossAxis.lengthSq() < 1e-8) {
+    crossAxis.crossVectors(new THREE.Vector3(0, 0, 1), radialDirection)
+  }
+  return crossAxis.normalize()
+}
 
 export function PlanetCameraControls({
   request,
@@ -62,12 +107,18 @@ export function PlanetCameraControls({
 
     if (!focusPosition) return
     if (isNewRequest) {
-      const viewDirection = camera.position.clone().sub(controls.target)
+      const viewDirection = request.view
+        ? getFocusedViewDirection(request.view, focusPosition)
+        : camera.position.clone().sub(controls.target)
       if (viewDirection.lengthSq() < 1e-8) viewDirection.set(1, 0.55, 1)
       viewDirection.normalize()
-      const viewingDistance = Math.max(focusRadius * 7, 0.025)
+      const currentDistance = camera.position.distanceTo(controls.target)
+      const viewingDistance = request.preserveDistance
+        ? THREE.MathUtils.clamp(currentDistance, planetMinDistance, planetMaxDistance)
+        : Math.max(focusRadius * 7, 0.025)
 
       controls.target.copy(focusPosition)
+      camera.up.set(0, request.view === 'top' ? 0 : 1, request.view === 'top' ? -1 : 0)
       camera.position.copy(focusPosition).addScaledVector(viewDirection, viewingDistance)
       camera.near = Math.max(focusRadius / 80, 0.00001)
       camera.far = planetFar
@@ -86,14 +137,15 @@ export function PlanetCameraControls({
     lastPlanetPosition.current = focusPosition.clone()
   }, [camera, focusPosition, focusPosition?.x, focusPosition?.y, focusPosition?.z, focusRadius, request])
 
-  const minimumDistance = request.kind === 'planet' ? planetMinDistance : 0.0015
+  const focused = request.kind !== 'overview'
+  const minimumDistance = focused ? planetMinDistance : 0.0015
 
   return (
     <OrbitControls
       ref={controlsRef}
       makeDefault
       minDistance={minimumDistance}
-      maxDistance={request.kind === 'planet' ? planetMaxDistance : overviewMaxDistance}
+      maxDistance={focused ? planetMaxDistance : overviewMaxDistance}
       enabled={enabled}
       enableDamping
       enablePan

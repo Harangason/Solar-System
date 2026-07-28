@@ -1,19 +1,25 @@
 import type { SunData } from '../types'
 
-// Die Bahnradien werden mit sqrt(AE) komprimiert. Eine groessere, rein
-// dekorative Sonne wuerde deshalb selbst eine physikalisch sichere
-// Perihelbahn (hier 0,05 AE) optisch verschlucken.
-export const SUN_SCENE_RADIUS = 0.85
+const AU_KM = 149_597_870.7
+
+// Positions and trajectories use orbitScale * sqrt(AE). The Sun must use the
+// same transform; a decorative fixed radius would make safe perihelia look as
+// if they crossed the body.
+export function sunSceneRadius(radiusKm: number, orbitScale: number) {
+  return orbitScale * Math.sqrt(radiusKm / AU_KM)
+}
 
 interface SunProps {
   sun: SunData
+  orbitScale: number
   sizeScale?: number
 }
 
-export function Sun({ sun, sizeScale = 1 }: SunProps) {
+export function Sun({ sun, orbitScale, sizeScale = 1 }: SunProps) {
+  const radius = sunSceneRadius(sun.radiusKm, orbitScale)
   return (
     <mesh scale={sizeScale}>
-      <sphereGeometry args={[SUN_SCENE_RADIUS, 48, 48]} />
+      <sphereGeometry args={[radius, 48, 48]} />
       <meshBasicMaterial color={sun.color} />
       <pointLight
         color="#ffd37a"
