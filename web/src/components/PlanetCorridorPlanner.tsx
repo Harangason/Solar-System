@@ -17,10 +17,11 @@ import {
   type CorridorTargetPhysics,
 } from '../corridorFeasibility'
 import { ROUTE_INTERSTELLAR_SYSTEMS } from '../interstellarTargets'
-import type { PlanetData, SunData } from '../types'
+import type { MoonData, PlanetData, SunData } from '../types'
 
 interface PlanetCorridorPlannerProps {
   planets: PlanetData[]
+  moons: MoonData[]
   sun: SunData
   originId: string
   onOriginChange: (objectId: string) => void
@@ -42,7 +43,6 @@ const CANVAS_HEIGHT = 620
 const CENTER_X = 635
 const CENTER_Y = 310
 const PLANET_RADIUS = 160
-const CORRIDOR_RADIUS = 220
 
 function polarPoint(radius: number, angleDeg: number) {
   const angle = angleDeg * Math.PI / 180
@@ -86,6 +86,7 @@ function normalizedDirection(direction: EntryCorridorDefinition['centerDirection
 
 export function PlanetCorridorPlanner({
   planets,
+  moons,
   sun,
   originId,
   onOriginChange,
@@ -108,8 +109,19 @@ export function PlanetCorridorPlanner({
   const selectedTarget = waypointId === 'sun'
     ? sun
     : planets.find((planet) => planet.id === waypointId)
+      ?? moons.find((moon) => moon.id === waypointId)
       ?? ROUTE_INTERSTELLAR_SYSTEMS.find((system) => system.id === waypointId)
       ?? planets[0]
+  const targetPhysics: CorridorTargetPhysics = {
+    radiusKm: selectedTarget && 'radiusKm' in selectedTarget ? selectedTarget.radiusKm : undefined,
+    surfaceGravity: selectedTarget && 'surfaceGravity' in selectedTarget ? selectedTarget.surfaceGravity : undefined,
+  }
+  const targetColor = selectedTarget && 'color' in selectedTarget
+    ? selectedTarget.color
+    : selectedTarget && 'parentId' in selectedTarget
+      ? planets.find((planet) => planet.id === selectedTarget.parentId)?.color ?? '#b9c7d6'
+      : '#d6a36f'
+  const feasibility = evaluateCorridorFeasibility(definition, targetPhysics)
   const direction = normalizedDirection(definition.centerDirection)
   const projectionAngleDeg = Math.atan2(
     isTopProjection ? direction[1] : direction[2],
@@ -120,9 +132,10 @@ export function PlanetCorridorPlanner({
     direction[0],
     isTopProjection ? direction[1] : direction[2],
   )
+  const physicalCorridorRadius = PLANET_RADIUS * feasibility.corridorRadiusRatio
   const displayCorridorRadius = isMainProjection
-    ? CORRIDOR_RADIUS
-    : Math.max(2, CORRIDOR_RADIUS * projectionMagnitude)
+    ? physicalCorridorRadius
+    : Math.max(2, physicalCorridorRadius * projectionMagnitude)
   const halfWidth = isTopProjection
     ? definition.horizontalHalfAngleDeg
     : definition.verticalHalfAngleDeg
@@ -159,13 +172,14 @@ export function PlanetCorridorPlanner({
   const selectedOrigin = originId === 'sun'
     ? sun
     : planets.find((planet) => planet.id === originId)
+      ?? moons.find((moon) => moon.id === originId)
       ?? ROUTE_INTERSTELLAR_SYSTEMS.find((system) => system.id === originId)
   const originName = selectedOrigin?.name ?? originId
-  const targetPhysics: CorridorTargetPhysics = {
-    radiusKm: selectedTarget && 'radiusKm' in selectedTarget ? selectedTarget.radiusKm : undefined,
-    surfaceGravity: selectedTarget && 'surfaceGravity' in selectedTarget ? selectedTarget.surfaceGravity : undefined,
-  }
-  const feasibility = evaluateCorridorFeasibility(definition, targetPhysics)
+  const originColor = selectedOrigin && 'color' in selectedOrigin
+    ? selectedOrigin.color
+    : selectedOrigin && 'parentId' in selectedOrigin
+      ? planets.find((planet) => planet.id === selectedOrigin.parentId)?.color ?? '#b9c7d6'
+      : '#9fcde6'
   const safetyRadiusPx = PLANET_RADIUS * feasibility.safetyRadiusRatio
   const clearanceLabel = feasibility.safetyRadiusKm === null
     ? 'Schematischer Mindestabstand'
@@ -181,6 +195,7 @@ export function PlanetCorridorPlanner({
     const target = targetId === 'sun'
       ? sun
       : planets.find((planet) => planet.id === targetId)
+        ?? moons.find((moon) => moon.id === targetId)
         ?? ROUTE_INTERSTELLAR_SYSTEMS.find((system) => system.id === targetId)
     const nextTargetPhysics: CorridorTargetPhysics = {
       radiusKm: target && 'radiusKm' in target ? target.radiusKm : undefined,
@@ -246,6 +261,13 @@ export function PlanetCorridorPlanner({
                 <option key={`origin-${planet.id}`} value={planet.id}>{planet.name}</option>
               ))}
             </optgroup>
+            <optgroup label="Monde">
+              {moons.filter((moon) => moon.id !== waypointId).map((moon) => (
+                <option key={`origin-${moon.id}`} value={moon.id}>
+                  {planets.find((planet) => planet.id === moon.parentId)?.name ?? moon.parentId} · {moon.name}
+                </option>
+              ))}
+            </optgroup>
             <optgroup label="Exoplanetensysteme">
               {ROUTE_INTERSTELLAR_SYSTEMS.filter((system) => system.id !== waypointId).map((system) => (
                 <option key={`origin-${system.id}`} value={system.id}>{system.name} · {system.distanceLy.toFixed(1)} Lj</option>
@@ -260,6 +282,13 @@ export function PlanetCorridorPlanner({
               {originId !== 'sun' && <option value="sun">Sonne</option>}
               {planets.filter((planet) => planet.id !== originId).map((planet) => (
                 <option key={planet.id} value={planet.id}>{planet.name}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Monde">
+              {moons.filter((moon) => moon.id !== originId).map((moon) => (
+                <option key={moon.id} value={moon.id}>
+                  {planets.find((planet) => planet.id === moon.parentId)?.name ?? moon.parentId} · {moon.name}
+                </option>
               ))}
             </optgroup>
             <optgroup label="Exoplanetensysteme">
@@ -388,11 +417,11 @@ export function PlanetCorridorPlanner({
       >
         <defs>
           <radialGradient id="planet-fill" cx="38%" cy="32%">
-            <stop offset="0%" stopColor={selectedTarget?.color ?? '#d6a36f'} stopOpacity="1" />
+            <stop offset="0%" stopColor={targetColor} stopOpacity="1" />
             <stop offset="100%" stopColor="#111b2c" stopOpacity="1" />
           </radialGradient>
-          <marker id="approach-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
-            <path d="M 0 0 L 9 4.5 L 0 9 Z" fill="#9feaff" />
+          <marker id="approach-arrow" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto">
+            <path d="M 0 0 L 6 3 L 0 6 Z" fill="#9feaff" />
           </marker>
           <marker id="coordinate-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
             <path d="M 0 0 L 8 4 L 0 8 Z" className="coordinate-arrow-head" />
@@ -511,7 +540,7 @@ export function PlanetCorridorPlanner({
           cx={approachStart.x}
           cy={approachStart.y}
           r="15"
-          fill={selectedOrigin?.color ?? '#9fcde6'}
+          fill={originColor}
           className="origin-object-symbol"
         />
         <text x={approachStart.x + 35} y={approachStart.y - 18} className="delta-v-label">Δv −{deltaVMinusKmS.toFixed(1)} km/s</text>

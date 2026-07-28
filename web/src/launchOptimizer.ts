@@ -140,6 +140,8 @@ export interface LaunchOptimizationResult {
   }
 }
 
+export type SolarEnergyFeasibility = LaunchOptimizationResult['solarEnergyFeasibility']
+
 interface OptimizationRequest {
   mission: MissionConfig
   waypointId: string
@@ -162,6 +164,24 @@ interface OptimizationRequest {
   confidenceThresholdPct: number
   maxIterations: number
   maxFullValidations?: number
+}
+
+interface SolarEnergyAssessmentRequest {
+  mission: MissionConfig
+  desiredSolarExitSpeedKmS: number
+}
+
+export async function requestSolarEnergyAssessment(values: SolarEnergyAssessmentRequest) {
+  const response = await fetch('/api/mission/assess-solar-energy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(values),
+  })
+  const payload = await response.json() as SolarEnergyFeasibility | { error?: string }
+  if (!response.ok || 'error' in payload) {
+    throw new Error('error' in payload && payload.error ? payload.error : `HTTP ${response.status}`)
+  }
+  return payload as SolarEnergyFeasibility
 }
 
 export async function requestLaunchOptimization(values: OptimizationRequest) {

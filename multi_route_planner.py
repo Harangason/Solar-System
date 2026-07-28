@@ -38,6 +38,7 @@ from trajectory import (
     simulate_mission,
 )
 from view_3d_celestials import PLANET_DATA
+from generic_route_planner import simulate_generic_route_sections
 
 
 SUN_MASS_KG = MU_SUN / G_KM3_KG_S2
@@ -588,6 +589,20 @@ def simulate_route_sections(values: dict | None) -> dict:
     raw_sections = values.get("routeSections")
     if not isinstance(raw_sections, list) or not raw_sections:
         raise ValueError("Mindestens ein 2D-Routenabschnitt ist erforderlich.")
+
+    propagable_planets = {row[0] for row in PLANET_EPHEMERIDES}
+    first_origin = str((raw_sections[0] or {}).get("originId") or "")
+    has_non_planet_target = any(
+        str((raw or {}).get("targetId") or "") not in propagable_planets
+        and str((raw or {}).get("targetId") or "") not in INTERSTELLAR_ROUTE_TARGETS
+        for raw in raw_sections
+    )
+    # Keep the specialised high-accuracy solar-Oberth chain only for the
+    # mission it actually models.  Every freely selected origin, and every
+    # Sun/moon endpoint, must use the selected bodies instead of an implicit
+    # Earth departure.
+    if first_origin != "sun" or has_non_planet_target:
+        return simulate_generic_route_sections(values)
 
     sections: list[dict] = []
     previous_target: str | None = None

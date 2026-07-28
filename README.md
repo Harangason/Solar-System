@@ -37,7 +37,15 @@ Grenzwertbetrachtungen und Modellgrenzen.
 ## Ueberblick
 
 Die App bildet eine lokale Umgebung zur Simulation von Missionen mit Bahn- und
-Routenberechnung sowie 2D/3D-Visualisierung auf.
+Routenberechnung sowie 2D/3D-Visualisierung auf. Ein Blanko-Projekt beginnt
+ohne implizite Musterroute. Routenabschnitte werden im 2D-Wizard frei zwischen
+Sonne, Planeten und katalogisierten Monden definiert, sortiert und anschliessend
+als zusammenhaengende Zustandskette in die 3D-Routenfuehrung uebernommen.
+
+Projekte lassen sich lokal speichern, unter neuem Namen ablegen und wieder
+oeffnen. Gespeichert werden Routenabschnitte, Missions- und
+Antriebskonfiguration, Darstellungsparameter sowie vorhandene Rechenergebnisse.
+Die lokale SQLite-Datei unter `data/` ist bewusst nicht Bestandteil von Git.
 
 ## Modellumfang
 
@@ -48,10 +56,35 @@ Routenberechnung sowie 2D/3D-Visualisierung auf.
 - Sonnenzentrierte Zwei-Koerper-Dynamik mit optionalen planetaren Stoertermen.
 - RK4-Integration fuer die Solar-Oberth-Missionsbahn.
 - Lambert-Randwertloesung fuer Wegpunkt-Transfers.
+- Koerperbasierte Routenabschnitte fuer frei gewaehlte Verbindungen zwischen
+  Sonne, Planeten und katalogisierten Monden.
 - Patched-Conic-Swing-by mit Einflusssphaere, Hyperbel und Zielasymptote.
 - Optionale simultane N-Koerper-Validierung ohne Kraftmodellwechsel an der SOI.
 - Modulare Antriebsmodelle fuer impulsive Burns, Solar Sail, Electric Sail,
-  elektrische Triebwerke und theoretische Konzepte.
+  elektrische Triebwerke und theoretische Konzepte; Auswahl und Kombination
+  erfolgen in einem gemeinsamen Konfigurations-Wizard.
+- Harte Kollisionspruefung fuer Sonnenpassagen. Physikalisch nicht ausfuehrbare
+  Idealbahnen bleiben als `Sollroute` analysierbar, koennen aber nicht als
+  Missionslauf abgespielt werden.
+
+## Datenhaltung und Rechennachweis
+
+`project_store.py` verwaltet versionierte Projektsnapshots in einer lokalen
+SQLite-Datenbank. Die API bietet:
+
+```text
+GET    /api/projects
+POST   /api/projects
+GET    /api/projects/<id>
+PUT    /api/projects/<id>
+DELETE /api/projects/<id>
+```
+
+Berechnungen und Missionswiedergaben erzeugen getrennte JSONL-Auditspuren.
+Sie enthalten Eingaben, verwendete Modelle, Zustandsuebergaenge,
+Delta-v-Anforderungen, Kollisionsreserven und Zielereignisse. Die Dateien
+unter `logs/` bleiben lokale Laufzeitdaten und werden nicht nach Git
+uebernommen.
 
 ## SPICE-Ephemeriden
 
@@ -747,14 +780,19 @@ Grenzwert- und Singularitaetsbetrachtung:
 | `satellite.py` | Raumfahrzeugstruktur, Massen, Stufen, Tsiolkovsky-Burns |
 | `mission_optimizer.py` | Suche und Bewertung von Missionsfenstern |
 | `calculation_audit.py` | JSONL-Nachweis der berechneten Routen |
+| `generic_route_planner.py` | Freie Transfers zwischen Sonne, Planeten und Monden |
+| `multi_route_planner.py` | Kopplung geordneter Routenabschnitte und Referenzrahmen |
+| `project_store.py` | Versionierte lokale SQLite-Projektsnapshots |
 | `web/src/orbitalMath.ts` | Planetendarstellung aus Kepler-Elementen |
 | `web/src/missionSimulation.ts` | Frontend-Konfiguration und API-Aufruf |
 | `web/src/propulsionModels.ts` | Frontend-Parameter der Antriebsmodule |
+| `web/src/projectStore.ts` | Projekt-API und gespeicherter Frontend-Zustand |
 
 ## Voraussetzungen
 
 - Python 3.8+
 - `pip`
+- Node.js und `npm` fuer die Frontend-Entwicklung
 - Virtuelle Umgebung empfohlen
 
 ## Installation
@@ -765,6 +803,15 @@ Linux/macOS:
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Frontend:
+
+```powershell
+cd web
+npm ci
+npm run build
+cd ..
 ```
 
 Windows PowerShell:
@@ -784,16 +831,19 @@ python main.py
 Danach im Browser oeffnen:
 
 ```text
-http://localhost:30000
+http://127.0.0.1:5001
 ```
 
 ## Features
 
 - Simulation von Missionen in 2D/3D.
 - Routenplanung und Missionsfenster-Optimierung.
+- Sortierbare, frei definierbare Routenabschnitte mit Zielkorridoren.
 - Bahn- und Trajektorienberechnung.
 - Interaktive Flask-Web-UI.
-- Berechnungsaudit fuer Nachvollziehbarkeit.
+- Lokale Projektverwaltung mit SQLite.
+- Kombinierbarer Antriebs-Wizard.
+- Berechnungs- und Playback-Audit fuer Nachvollziehbarkeit.
 
 ## Screenshots / Visuals
 
@@ -812,7 +862,8 @@ Die technisch gesetzten Formeln der README liegen als SVG in
 - [ ] Stabilere Berechnungen bei Randfaellen in der Missionssimulation.
 - [ ] Einheitliche Eingabevalidierung fuer Missions- und Simulationsdaten.
 - [ ] Bessere, konsistente Fehleranzeigen in der Web-Oberflaeche.
-- [ ] Unit-Tests fuer `trajectory`, `route_planner`, `mission_optimizer`.
+- [x] Unit-Tests fuer Routenplanung, Optimierung, Playback-Audit und
+  Projektspeicherung.
 - [ ] Theme-Umschaltung und bessere Navigationsstruktur.
 - [ ] Exportfunktionen fuer Missionsberichte als CSV/JSON.
 
@@ -824,6 +875,7 @@ Routenberechnungen koennen in JSONL-Auditdateien protokolliert werden:
 ```text
 logs/route_calculations.jsonl
 logs/mission_optimizer.jsonl
+logs/mission_playback.jsonl
 ```
 
 Diese Dateien enthalten Grenzpunktfehler, Delta-v-Anforderungen,
@@ -833,7 +885,7 @@ SPICE-Zielkörper.
 
 ## Konfiguration
 
-- Standard-Port: `30000`.
+- Standard-Port: `5001`.
 - Zentrale Parameter liegen im jeweiligen Modul, insbesondere in `main.py`,
   `trajectory.py`, `propulsion.py` und `web/src/missionSimulation.ts`.
 - Unterstuetzte Kernabhaengigkeiten: `Flask`, `SciPy`, `Matplotlib`,

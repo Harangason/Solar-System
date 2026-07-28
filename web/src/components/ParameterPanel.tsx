@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 
-import { applyPropulsionPreset, PROPULSION_PRESETS } from '../propulsionModels'
 import type { LaunchOptimizationResult } from '../launchOptimizer'
 import type {
   MissionConfig,
@@ -10,6 +9,7 @@ import type {
   TrajectoryPoint,
   VisualConfig,
 } from '../types'
+import { PropulsionWizard } from './PropulsionWizard'
 
 interface NumberFieldProps {
   label: string
@@ -109,7 +109,7 @@ export function ParameterPanel({
   onDraftChange,
 }: ParameterPanelProps) {
   const [moonSearch, setMoonSearch] = useState('')
-  const [propulsionPresetId, setPropulsionPresetId] = useState('oberth-electric')
+  const [propulsionWizardOpen, setPropulsionWizardOpen] = useState(false)
   const filteredMoons = useMemo(() => {
     const query = moonSearch.trim().toLocaleLowerCase('de-DE')
     return selectedMoons.filter((moon) => !query
@@ -122,29 +122,24 @@ export function ParameterPanel({
   const updateVisual = <K extends keyof VisualConfig>(key: K, value: VisualConfig[K]) => {
     onVisualChange({ ...visual, [key]: value })
   }
-  const updatePropulsionModule = (moduleId: string, changes: Partial<MissionConfig['propulsionModules'][number]>) => {
-    const propulsionModules = draft.propulsionModules.map((module) => module.id === moduleId ? { ...module, ...changes } : module)
-    const selected = propulsionModules.find((module) => module.id === moduleId)
-    onDraftChange({
-      ...draft,
-      propulsionModules,
-      ...(selected?.type === 'electric_sail' ? { electricSailEnabled: selected.enabled } : {}),
-    })
-  }
-  const updatePropulsionParameter = (moduleId: string, key: string, value: number | string | boolean) => {
-    const propulsionModules = draft.propulsionModules.map((module) => module.id === moduleId
-      ? { ...module, parameters: { ...module.parameters, [key]: value } }
+  const enabledPropulsionModules = draft.propulsionModules.filter((module) => module.enabled)
+  const propulsionMassKg = enabledPropulsionModules.reduce(
+    (sum, module) => sum + module.dryMassKg + module.propellantMassKg,
+    0,
+  )
+  const updateElectricSailMission = <K extends keyof MissionConfig>(
+    key: K,
+    value: MissionConfig[K],
+    parameterKey?: string,
+  ) => {
+    const propulsionModules = draft.propulsionModules.map((module) => module.type === 'electric_sail'
+      ? {
+          ...module,
+          ...(key === 'electricSailEnabled' ? { enabled: Boolean(value) } : {}),
+          parameters: parameterKey ? { ...module.parameters, [parameterKey]: value as number } : module.parameters,
+        }
       : module)
-    const module = propulsionModules.find((item) => item.id === moduleId)
-    const linked: Partial<MissionConfig> = {}
-    if (module?.type === 'electric_sail') {
-      if (key === 'totalTetherCount') linked.tetherCount = Number(value)
-      if (key === 'instrumentedTetherCount') linked.instrumentedTetherCount = Number(value)
-      if (key === 'tetherLengthKm') linked.tetherLengthKm = Number(value)
-      if (key === 'tetherVoltageKV') linked.tetherVoltageKv = Number(value)
-      if (key === 'spinRateRpm') linked.spinRateRpm = Number(value)
-    }
-    onDraftChange({ ...draft, ...linked, propulsionModules })
+    onDraftChange({ ...draft, [key]: value, propulsionModules })
   }
   const selectedPlanetSpeed = selectedPlanet ? 29.78 / Math.sqrt(selectedPlanet.distanceAu) : 0
   const earthAngle = elapsedDays / 365.25 * Math.PI * 2
@@ -316,61 +311,46 @@ export function ParameterPanel({
       </details>
 
       <details>
-        <summary>Electric Sail</summary>
-        <Toggle label="Electric Sail aktiv" checked={draft.electricSailEnabled} onChange={(value) => updateMission('electricSailEnabled', value)} />
-        <NumberField label="Tethers gesamt" value={draft.tetherCount} min={1} max={200} onChange={(value) => updateMission('tetherCount', value)} />
-        <NumberField label="Instrumentiert" value={draft.instrumentedTetherCount} min={0} max={draft.tetherCount} onChange={(value) => updateMission('instrumentedTetherCount', value)} />
-        <NumberField label="Tether-Länge" value={draft.tetherLengthKm} min={1} max={100} unit="km" onChange={(value) => updateMission('tetherLengthKm', value)} />
-        <NumberField label="Spannung" value={draft.tetherVoltageKv} min={1} max={100} unit="kV" onChange={(value) => updateMission('tetherVoltageKv', value)} />
-        <NumberField label="Spinrate" value={draft.spinRateRpm} min={0.1} max={10} step={0.1} unit="rpm" onChange={(value) => updateMission('spinRateRpm', value)} />
-        <Toggle label="Endmassen aktiv" checked={draft.endMassesEnabled} onChange={(value) => updateMission('endMassesEnabled', value)} />
-        <Toggle label="Glasfaser-Kommunikation" checked={draft.fiberCommunicationEnabled} onChange={(value) => updateMission('fiberCommunicationEnabled', value)} />
-        <Toggle label="Sensor-Endknoten" checked={draft.sensorNodesEnabled} onChange={(value) => updateMission('sensorNodesEnabled', value)} />
-        <NumberField label="Schub bei 1 AE" value={draft.sailAccelerationMmS2} min={0} max={2} step={0.01} unit="mm/s²" onChange={(value) => updateMission('sailAccelerationMmS2', value)} />
+        <summary>Antriebe · modular</summary>
+        <details className="propulsion-subsection">
+          <summary>Electric Sail · Missionssystem</summary>
+          <Toggle label="Electric Sail aktiv" checked={draft.electricSailEnabled} onChange={(value) => updateElectricSailMission('electricSailEnabled', value)} />
+          <NumberField label="Tethers gesamt" value={draft.tetherCount} min={1} max={200} onChange={(value) => updateElectricSailMission('tetherCount', value, 'totalTetherCount')} />
+          <NumberField label="Instrumentiert" value={draft.instrumentedTetherCount} min={0} max={draft.tetherCount} onChange={(value) => updateElectricSailMission('instrumentedTetherCount', value, 'instrumentedTetherCount')} />
+          <NumberField label="Tether-Länge" value={draft.tetherLengthKm} min={1} max={100} unit="km" onChange={(value) => updateElectricSailMission('tetherLengthKm', value, 'tetherLengthKm')} />
+          <NumberField label="Spannung" value={draft.tetherVoltageKv} min={1} max={100} unit="kV" onChange={(value) => updateElectricSailMission('tetherVoltageKv', value, 'tetherVoltageKV')} />
+          <NumberField label="Spinrate" value={draft.spinRateRpm} min={0.1} max={10} step={0.1} unit="rpm" onChange={(value) => updateElectricSailMission('spinRateRpm', value, 'spinRateRpm')} />
+          <Toggle label="Endmassen aktiv" checked={draft.endMassesEnabled} onChange={(value) => updateMission('endMassesEnabled', value)} />
+          <Toggle label="Glasfaser-Kommunikation" checked={draft.fiberCommunicationEnabled} onChange={(value) => updateMission('fiberCommunicationEnabled', value)} />
+          <Toggle label="Sensor-Endknoten" checked={draft.sensorNodesEnabled} onChange={(value) => updateMission('sensorNodesEnabled', value)} />
+          <NumberField label="Schub bei 1 AE" value={draft.sailAccelerationMmS2} min={0} max={2} step={0.01} unit="mm/s²" onChange={(value) => updateMission('sailAccelerationMmS2', value)} />
+        </details>
+        <div className="propulsion-panel-summary">
+          <dl className="compact-data">
+            <div><dt>Ausgewählt</dt><dd>{enabledPropulsionModules.length} Module</dd></div>
+            <div><dt>Modulmasse</dt><dd>{propulsionMassKg.toLocaleString('de-DE')} kg</dd></div>
+            <div><dt>Szenario</dt><dd>{draft.theoreticalPropulsionMode ? 'Theoretisch' : 'Physikalisch'}</dd></div>
+          </dl>
+          <div className="propulsion-panel-tags" aria-label="Ausgewählte Antriebsmodule">
+            {enabledPropulsionModules.map((module) => <span key={module.id}>{module.name}</span>)}
+            {enabledPropulsionModules.length === 0 && <span className="empty">Keine Module ausgewählt</span>}
+          </div>
+          <button type="button" className="propulsion-wizard-open" onClick={() => setPropulsionWizardOpen(true)}>
+            Antriebskombination konfigurieren
+          </button>
+        </div>
       </details>
 
-      <details>
-        <summary>Antriebe · modular</summary>
-        <div className="propulsion-preset-row">
-          <select value={propulsionPresetId} onChange={(event) => setPropulsionPresetId(event.target.value)}>
-            {PROPULSION_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
-          </select>
-          <button type="button" onClick={() => {
-            const preset = PROPULSION_PRESETS.find((item) => item.id === propulsionPresetId)
-            if (preset) onDraftChange(applyPropulsionPreset(draft, preset))
-          }}>Preset laden</button>
-        </div>
-        <Toggle label="Theoretischen Szenariomodus erlauben" checked={draft.theoreticalPropulsionMode} onChange={(value) => updateMission('theoreticalPropulsionMode', value)} />
-        <div className="propulsion-module-list">
-          {draft.propulsionModules.map((module) => {
-            const report = result?.summary.propulsionReport.find((item) => item.id === module.id)
-            return (
-              <details className={`propulsion-module readiness-${module.readiness}`} key={module.id}>
-                <summary><span>{module.name}</span><span className={`readiness-badge ${module.readiness}`}>{module.readiness}</span></summary>
-                <Toggle label="Aktiviert" checked={module.enabled} onChange={(value) => updatePropulsionModule(module.id, { enabled: value })} />
-                <Toggle label="Visualisierung" checked={module.visualEnabled} onChange={(value) => updatePropulsionModule(module.id, { visualEnabled: value })} />
-                <dl className="compact-data propulsion-status">
-                  <div><dt>Status</dt><dd>{report && report.activeSeconds > 0 ? 'aktiv gewesen' : module.enabled ? 'bereit' : 'aus'}</dd></div>
-                  <div><dt>Schub Spitze</dt><dd>{(report?.peakThrustN ?? 0).toExponential(2)} N</dd></div>
-                  <div><dt>Δv geliefert</dt><dd>{(report?.deltaVDeliveredKmS ?? 0).toFixed(3)} km/s</dd></div>
-                  <div><dt>Verbrauch</dt><dd>{(report?.propellantUsedKg ?? 0).toFixed(3)} kg</dd></div>
-                  <div><dt>Masse</dt><dd>{module.dryMassKg.toLocaleString('de-DE')} kg</dd></div>
-                  <div><dt>Risiko</dt><dd>{report?.risk ?? '—'}</dd></div>
-                </dl>
-                <div className="propulsion-parameters">
-                  {Object.entries(module.parameters).map(([key, value]) => (
-                    <label key={key}><span>{key}</span>{typeof value === 'boolean'
-                      ? <input type="checkbox" checked={value} onChange={(event) => updatePropulsionParameter(module.id, key, event.target.checked)} />
-                      : <input type={typeof value === 'number' ? 'number' : 'text'} value={String(value)} onChange={(event) => updatePropulsionParameter(module.id, key, typeof value === 'number' ? event.target.valueAsNumber : event.target.value)} />}</label>
-                  ))}
-                </div>
-                {[...(report?.warnings ?? []), ...module.warnings].filter((warning, index, all) => all.indexOf(warning) === index).map((warning) => <p className="parameter-warning" key={warning}>{warning}</p>)}
-                {['conceptual', 'speculative', 'fictional'].includes(module.readiness) && <p className="parameter-warning">Nicht als heute verfügbare Technologie behandeln.</p>}
-              </details>
-            )
-          })}
-        </div>
-      </details>
+      {propulsionWizardOpen && (
+        <PropulsionWizard
+          config={draft}
+          onCancel={() => setPropulsionWizardOpen(false)}
+          onApply={(next) => {
+            onDraftChange(next)
+            setPropulsionWizardOpen(false)
+          }}
+        />
+      )}
 
       <details>
         <summary>Anzeige</summary>

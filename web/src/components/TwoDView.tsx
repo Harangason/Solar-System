@@ -126,7 +126,7 @@ export function TwoDView({
     : `${-EXTENT} ${-SIDE_HALF_HEIGHT} ${EXTENT * 2} ${SIDE_HALF_HEIGHT * 2}`
 
   if (error) return <div className="status-message">{error}</div>
-  if (!data || !activeRouteSection) return <div className="status-message">2D-Orbitalplaner wird geladen …</div>
+  if (!data) return <div className="status-message">2D-Orbitalplaner wird geladen …</div>
 
   const updateActiveRouteSection = (update: (section: RouteSectionDefinition) => RouteSectionDefinition) => {
     onRouteSectionsChange((current) => current.map((section) => (
@@ -139,21 +139,15 @@ export function TwoDView({
       corridor: typeof action === 'function' ? action(section.corridor) : action,
     }))
   }
-  const suggestedOriginId = activeRouteSection.targetId
-  const suggestedOriginIndex = data.planets.findIndex((planet) => planet.id === suggestedOriginId)
-  const suggestedTargetId = suggestedOriginIndex >= 0
-    ? data.planets[(suggestedOriginIndex + 1) % data.planets.length]?.id ?? 'earth'
-    : suggestedOriginId === 'sun' ? data.planets[0]?.id ?? 'earth' : 'sun'
   const createSection = (section: RouteSectionDefinition) => {
     onRouteSectionsChange((current) => [...current, section])
     onActiveRouteSectionChange(section.id)
   }
   const deleteSection = (sectionId: string) => {
-    if (routeSections.length === 1) return
     const deletedIndex = routeSections.findIndex((section) => section.id === sectionId)
     const nextActiveId = routeSections[deletedIndex + 1]?.id ?? routeSections[deletedIndex - 1]?.id
     onRouteSectionsChange((current) => current.filter((section) => section.id !== sectionId))
-    if (sectionId === activeRouteSectionId && nextActiveId) onActiveRouteSectionChange(nextActiveId)
+    if (sectionId === activeRouteSectionId) onActiveRouteSectionChange(nextActiveId ?? '')
   }
   const moveSection = (sectionId: string, direction: -1 | 1) => {
     onRouteSectionsChange((current) => {
@@ -188,8 +182,10 @@ export function TwoDView({
       {projection === 'corridor'
         ? (
           <div className="route-section-planner">
-            <PlanetCorridorPlanner
+            {activeRouteSection
+              ? <PlanetCorridorPlanner
               planets={data.planets}
+              moons={moonCatalogue?.moons ?? []}
               sun={data.sun}
               originId={activeRouteSection.originId}
               onOriginChange={(originId) => updateActiveRouteSection((section) => ({ ...section, originId }))}
@@ -201,14 +197,21 @@ export function TwoDView({
               deltaVPlusKmS={activeRouteSection.deltaVPlusKmS}
               onDeltaVMinusChange={(deltaVMinusKmS) => updateActiveRouteSection((section) => ({ ...section, deltaVMinusKmS }))}
               onDeltaVPlusChange={(deltaVPlusKmS) => updateActiveRouteSection((section) => ({ ...section, deltaVPlusKmS }))}
-              sectionNumber={routeSections.findIndex((section) => section.id === activeRouteSectionId) + 1}
-            />
+                  sectionNumber={routeSections.findIndex((section) => section.id === activeRouteSectionId) + 1}
+                />
+              : (
+                <div className="route-project-empty" role="status">
+                  <strong>Blanko-Projekt</strong>
+                  <span>Noch keine Verbindung angelegt. Erstelle den ersten unabhängigen Routenabschnitt mit „+ Neu“.</span>
+                </div>
+              )}
             <RouteSectionList
               planets={data.planets}
+              moons={moonCatalogue?.moons ?? []}
               sections={routeSections}
               activeSectionId={activeRouteSectionId}
-              suggestedOriginId={suggestedOriginId}
-              suggestedTargetId={suggestedTargetId === suggestedOriginId ? 'earth' : suggestedTargetId}
+              suggestedOriginId=""
+              suggestedTargetId=""
                 onCreate={createSection}
                 onEdit={onActiveRouteSectionChange}
                 onDelete={deleteSection}

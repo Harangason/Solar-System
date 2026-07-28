@@ -81,3 +81,27 @@ export function applyPropulsionPreset(config: MissionConfig, preset: PropulsionP
   }
 }
 
+export function applyPropulsionConfiguration(
+  config: MissionConfig,
+  propulsionModules: PropulsionModule[],
+  theoreticalPropulsionMode: boolean,
+): MissionConfig {
+  const modules = propulsionModules.map((item) => ({
+    ...item,
+    parameters: { ...item.parameters },
+    warnings: [...item.warnings],
+  }))
+  const electric = modules.find((item) => item.type === 'electric_sail')
+  return {
+    ...config,
+    propulsionModules: modules,
+    theoreticalPropulsionMode,
+    electricSailEnabled: Boolean(electric?.enabled),
+    tetherCount: Number(electric?.parameters.totalTetherCount ?? config.tetherCount),
+    instrumentedTetherCount: Number(electric?.parameters.instrumentedTetherCount ?? config.instrumentedTetherCount),
+    tetherLengthKm: Number(electric?.parameters.tetherLengthKm ?? config.tetherLengthKm),
+    tetherVoltageKv: Number(electric?.parameters.tetherVoltageKV ?? config.tetherVoltageKv),
+    spinRateRpm: Number(electric?.parameters.spinRateRpm ?? config.spinRateRpm),
+  }
+}
+

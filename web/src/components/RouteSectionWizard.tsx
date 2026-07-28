@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 
 import { ROUTE_INTERSTELLAR_SYSTEMS } from '../interstellarTargets'
 import { createRouteSection, type RouteSectionDefinition } from '../routeSections'
-import type { PlanetData } from '../types'
+import type { MoonData, PlanetData } from '../types'
 
 interface RouteSectionWizardProps {
   planets: PlanetData[]
+  moons: MoonData[]
   suggestedOriginId: string
   suggestedTargetId: string
   onCancel: () => void
@@ -14,9 +15,11 @@ interface RouteSectionWizardProps {
 
 type WizardStep = 1 | 2 | 3
 
-function objectName(objectId: string, planets: PlanetData[]) {
+function objectName(objectId: string, planets: PlanetData[], moons: MoonData[]) {
+  if (!objectId) return 'Nicht gewählt'
   if (objectId === 'sun') return 'Sonne'
   return planets.find((planet) => planet.id === objectId)?.name
+    ?? moons.find((moon) => moon.id === objectId)?.name
     ?? ROUTE_INTERSTELLAR_SYSTEMS.find((system) => system.id === objectId)?.name
     ?? objectId
 }
@@ -27,6 +30,7 @@ function finitePositive(value: number, fallback: number) {
 
 export function RouteSectionWizard({
   planets,
+  moons,
   suggestedOriginId,
   suggestedTargetId,
   onCancel,
@@ -91,7 +95,7 @@ export function RouteSectionWizard({
         {step === 1 && (
           <fieldset>
             <legend>Wo beginnt und endet dieser Abschnitt?</legend>
-            <p>Der Vorschlag beginnt am Ziel des aktiven Abschnitts. Du kannst beide Objekte frei ändern.</p>
+            <p>Jeder Abschnitt wird unabhängig angelegt. Eine Verkettung entsteht nur durch deine ausdrückliche Auswahl.</p>
             <div className="wizard-connection">
               <label>
                 <span>Ursprung</span>
@@ -99,10 +103,18 @@ export function RouteSectionWizard({
                   value={draft.originId}
                   onChange={(event) => setDraft((current) => ({ ...current, originId: event.target.value }))}
                 >
+                  <option value="" disabled>Ursprung wählen …</option>
                   <optgroup label="Sonnensystem">
                     {draft.targetId !== 'sun' && <option value="sun">Sonne</option>}
                     {planets.filter((planet) => planet.id !== draft.targetId).map((planet) => (
                       <option key={`wizard-origin-${planet.id}`} value={planet.id}>{planet.name}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Monde">
+                    {moons.filter((moon) => moon.id !== draft.targetId).map((moon) => (
+                      <option key={`wizard-origin-${moon.id}`} value={moon.id}>
+                        {planets.find((planet) => planet.id === moon.parentId)?.name ?? moon.parentId} · {moon.name}
+                      </option>
                     ))}
                   </optgroup>
                   <optgroup label="Exoplanetensysteme">
@@ -119,10 +131,18 @@ export function RouteSectionWizard({
                   value={draft.targetId}
                   onChange={(event) => setDraft((current) => ({ ...current, targetId: event.target.value }))}
                 >
+                  <option value="" disabled>Ziel wählen …</option>
                   <optgroup label="Sonnensystem">
                     {draft.originId !== 'sun' && <option value="sun">Sonne</option>}
                     {planets.filter((planet) => planet.id !== draft.originId).map((planet) => (
                       <option key={`wizard-target-${planet.id}`} value={planet.id}>{planet.name}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Monde">
+                    {moons.filter((moon) => moon.id !== draft.originId).map((moon) => (
+                      <option key={`wizard-target-${moon.id}`} value={moon.id}>
+                        {planets.find((planet) => planet.id === moon.parentId)?.name ?? moon.parentId} · {moon.name}
+                      </option>
                     ))}
                   </optgroup>
                   <optgroup label="Exoplanetensysteme">
@@ -134,7 +154,7 @@ export function RouteSectionWizard({
               </label>
             </div>
             <output className="wizard-route-preview">
-              {objectName(draft.originId, planets)} <span>→</span> {objectName(draft.targetId, planets)}
+              {objectName(draft.originId, planets, moons)} <span>→</span> {objectName(draft.targetId, planets, moons)}
             </output>
           </fieldset>
         )}
@@ -228,7 +248,7 @@ export function RouteSectionWizard({
               </label>
             </div>
             <dl className="wizard-summary">
-              <div><dt>Verbindung</dt><dd>{objectName(draft.originId, planets)} → {objectName(draft.targetId, planets)}</dd></div>
+              <div><dt>Verbindung</dt><dd>{objectName(draft.originId, planets, moons)} → {objectName(draft.targetId, planets, moons)}</dd></div>
               <div><dt>Zielkorridor</dt><dd>{draft.corridor.enabled ? 'Aktiv' : 'Deaktiviert'}</dd></div>
               <div><dt>Winkelbereich</dt><dd>±{draft.corridor.horizontalHalfAngleDeg.toFixed(0)}° / ±{draft.corridor.verticalHalfAngleDeg.toFixed(0)}°</dd></div>
               <div><dt>Δv-Fächer</dt><dd>−{draft.deltaVMinusKmS.toFixed(1)} / +{draft.deltaVPlusKmS.toFixed(1)} km/s</dd></div>
@@ -242,7 +262,7 @@ export function RouteSectionWizard({
         <div>
           {step > 1 && <button type="button" onClick={() => setStep((current) => (current - 1) as WizardStep)}>Zurück</button>}
           {step < 3
-            ? <button type="button" className="primary" onClick={() => setStep((current) => (current + 1) as WizardStep)}>Weiter</button>
+            ? <button type="button" className="primary" disabled={step === 1 && (!draft.originId || !draft.targetId || draft.originId === draft.targetId)} onClick={() => setStep((current) => (current + 1) as WizardStep)}>Weiter</button>
             : <button type="button" className="primary" onClick={() => onCreate(draft)}>Abschnitt erstellen</button>}
         </div>
       </footer>

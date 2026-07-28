@@ -171,6 +171,22 @@ def _solar_energy_budget(config: MissionConfig, desired_exit_speed_km_s: float) 
     }
 
 
+def assess_solar_energy(values: dict | None) -> dict:
+    """Return the hard propulsion bound without starting a calendar search."""
+    values = values or {}
+    config = MissionConfig.from_dict(dict(values.get("mission") or {}))
+    errors = validate_mission_config(config)
+    if errors:
+        raise ValueError(" ".join(errors))
+    desired_exit_speed_km_s = float(values.get("desiredSolarExitSpeedKmS", 100.0))
+    if not 1.0 <= desired_exit_speed_km_s <= 1_000.0:
+        raise ValueError(
+            "Die Zielgeschwindigkeit am 1-AE-Sonnenaustritt muss zwischen "
+            "1 und 1.000 km/s liegen."
+        )
+    return _solar_energy_budget(config, desired_exit_speed_km_s)
+
+
 def _empirical_search_seeds(
     values: dict,
     base_date: date,

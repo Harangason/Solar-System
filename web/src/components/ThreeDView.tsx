@@ -16,9 +16,10 @@ import { INTERSTELLAR_TARGETS } from '../interstellarTargets'
 import { interstellarTargetPosition } from '../celestialCoordinates'
 import { withCorridorFeasibility, type CorridorTargetPhysics } from '../corridorFeasibility'
 import { DEFAULT_ENTRY_CORRIDOR, type EntryCorridorDefinition } from '../entryCorridorGeometry'
-import { requestLaunchOptimization, type LaunchOptimizationResult } from '../launchOptimizer'
+import { requestLaunchOptimization, requestSolarEnergyAssessment, type LaunchOptimizationResult, type SolarEnergyFeasibility } from '../launchOptimizer'
 import { DEFAULT_MISSION_CONFIG, requestMissionSimulation, validateMissionConfig } from '../missionSimulation'
 import { planetPositionAt } from '../orbitalMath'
+import { appendPlaybackAuditEvent, startPlaybackAudit, type PlaybackEventType, type PlaybackStateSnapshot } from '../playbackAudit'
 import type { RouteSectionDefinition } from '../routeSections'
 import { popSketchHistory, removeSketchSelection } from '../routeSketchState'
 import type { MissionConfig, MissionResult, MoonCatalogue, MoonData, PlanetData, SolarSystemData, VisualConfig } from '../types'
@@ -41,7 +42,7 @@ import {
 import { PlannedWaypointRoute, type WaypointRouteResult } from './PlannedWaypointRoute'
 import { PlanetMesh } from './PlanetMesh'
 import { createRouteSketch, RoutePlanPreview, type RouteDrawTool, type RouteSketch, type RouteSketchSelection, type RouteTransformMode } from './RoutePlanPreview'
-import { Sun, SUN_SCENE_RADIUS } from './Sun'
+import { Sun } from './Sun'
 
 const DEFAULT_VISUAL_CONFIG: VisualConfig = {
   orbitScale: 5,
@@ -80,7 +81,8 @@ const WEBGL_CAMERA = { position: [46, 38, 58] as [number, number, number], fov: 
 type AimpointRole = 'entry' | 'periapsis' | 'exit' | 'periapsis_point'
 
 function scaledRadius(planet: PlanetData, sunRadiusKm: number, visual: VisualConfig) {
-  return SUN_SCENE_RADIUS * (planet.radiusKm / sunRadiusKm) * visual.planetScale
+  const readableSunReferenceRadius = 0.85
+  return readableSunReferenceRadius * (planet.radiusKm / sunRadiusKm) * visual.planetScale
 }
 
 function pointAtDay(result: MissionResult, elapsedDays: number) {
@@ -112,6 +114,41 @@ interface ThreeDViewProps {
   onPlannedMissionDateChange: Dispatch<SetStateAction<string | null>>
   plannedRoute: WaypointRouteResult | null
   onPlannedRouteChange: Dispatch<SetStateAction<WaypointRouteResult | null>>
+  onOpenRoutePlanner: () => void
+  restoredMissionConfig: MissionConfig | null
+  restoredVisualConfig: VisualConfig | null
+  restoredMissionResult: MissionResult | null
+  projectLoadToken: number
+  onMissionConfigChange: Dispatch<SetStateAction<MissionConfig | null>>
+  onVisualConfigChange: Dispatch<SetStateAction<VisualConfig | null>>
+  onMissionResultChange: Dispatch<SetStateAction<MissionResult | null>>
+}
+
+function routeStateAtDay(route: WaypointRouteResult, elapsedDays: number): PlaybackStateSnapshot {
+  const points = route.trajectory
+  let low = 0
+  let high = points.length - 1
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (points[middle].elapsedDays <= elapsedDays) low = middle
+    else high = middle - 1
+  }
+  const current = points[low]
+  const next = points[Math.min(points.length - 1, low + 1)]
+  if (!current) return { positionKm: [0, 0, 0] }
+  const durationSeconds = Math.max(0, (next.elapsedDays - current.elapsedDays) * 86_400)
+  const fraction = durationSeconds > 0
+    ? Math.max(0, Math.min(1, (elapsedDays - current.elapsedDays) * 86_400 / durationSeconds))
+    : 0
+  const positionKm = current.positionKm.map(
+    (component, index) => component + (next.positionKm[index] - component) * fraction,
+  ) as [number, number, number]
+  const velocityKmS = durationSeconds > 0
+    ? current.positionKm.map(
+      (component, index) => (next.positionKm[index] - component) / durationSeconds,
+    ) as [number, number, number]
+    : undefined
+  return { positionKm, velocityKmS }
 }
 
 export function ThreeDView({
@@ -123,6 +160,14 @@ export function ThreeDView({
   onPlannedMissionDateChange: setPlannedMissionDate,
   plannedRoute,
   onPlannedRouteChange: setPlannedRoute,
+  onOpenRoutePlanner,
+  restoredMissionConfig,
+  restoredVisualConfig,
+  restoredMissionResult,
+  projectLoadToken,
+  onMissionConfigChange,
+  onVisualConfigChange,
+  onMissionResultChange,
 }: ThreeDViewProps) {
   const [data, setData] = useState<SolarSystemData | null>(null)
   const [moonCatalogue, setMoonCatalogue] = useState<MoonCatalogue | null>(null)
@@ -136,6 +181,49 @@ export function ThreeDView({
   const [result, setResult] = useState<MissionResult | null>(null)
   const [elapsedDays, setElapsedDays] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const pendingMissionConfigRef = useRef<MissionConfig | null | undefined>(undefined)
+  const pendingVisualConfigRef = useRef<VisualConfig | null | undefined>(undefined)
+  const pendingMissionResultRef = useRef<MissionResult | null | undefined>(undefined)
+
+  useEffect(() => {
+    if (projectLoadToken === 0) return
+    const nextMissionConfig = restoredMissionConfig ?? DEFAULT_MISSION_CONFIG
+    const nextVisualConfig = restoredVisualConfig ?? DEFAULT_VISUAL_CONFIG
+    pendingMissionConfigRef.current = nextMissionConfig
+    pendingVisualConfigRef.current = nextVisualConfig
+    pendingMissionResultRef.current = restoredMissionResult
+    setDraft(nextMissionConfig)
+    setVisual(nextVisualConfig)
+    setResult(restoredMissionResult)
+    setElapsedDays(0)
+    setPlaying(false)
+  }, [
+    projectLoadToken,
+    restoredMissionConfig,
+    restoredMissionResult,
+    restoredVisualConfig,
+  ])
+  useEffect(() => {
+    if (pendingMissionConfigRef.current !== undefined && pendingMissionConfigRef.current !== draft) return
+    pendingMissionConfigRef.current = undefined
+    onMissionConfigChange(draft)
+  }, [draft, onMissionConfigChange])
+  useEffect(() => {
+    if (pendingVisualConfigRef.current !== undefined && pendingVisualConfigRef.current !== visual) return
+    pendingVisualConfigRef.current = undefined
+    onVisualConfigChange(visual)
+  }, [onVisualConfigChange, visual])
+  useEffect(() => {
+    if (pendingMissionResultRef.current !== undefined && pendingMissionResultRef.current !== result) return
+    pendingMissionResultRef.current = undefined
+    onMissionResultChange(result)
+  }, [onMissionResultChange, result])
+  const [playbackAuditStatus, setPlaybackAuditStatus] = useState<'idle' | 'starting' | 'recording' | 'paused' | 'complete' | 'reset'>('idle')
+  const [playbackAuditError, setPlaybackAuditError] = useState<string | null>(null)
+  const playbackAuditIdRef = useRef<string | null>(null)
+  const playbackAuditSequenceRef = useRef(0)
+  const playbackAuditLastCheckpointDayRef = useRef(0)
+  const playbackAuditLastSectionIdRef = useRef<string | null>(null)
   const [simulationSpeed, setSimulationSpeed] = useState(30)
   const [stepDays, setStepDays] = useState(1)
   const [showMoons, setShowMoons] = useState(true)
@@ -161,6 +249,7 @@ export function ThreeDView({
   const [desiredSolarExitSpeedKmS, setDesiredSolarExitSpeedKmS] = useState(100)
   const [optimizationLoading, setOptimizationLoading] = useState(false)
   const [optimizationResult, setOptimizationResult] = useState<LaunchOptimizationResult | null>(null)
+  const [optimizationPreflight, setOptimizationPreflight] = useState<SolarEnergyFeasibility | null>(null)
   const [autoReoptimize, setAutoReoptimize] = useState(false)
   const [recalculationMinutes, setRecalculationMinutes] = useState(5)
   const [showRouteDispersion, setShowRouteDispersion] = useState(false)
@@ -298,7 +387,8 @@ export function ThreeDView({
     ?? plannedRoute?.trajectory.at(-1)?.elapsedDays
     ?? visibleMissionResult?.summary.totalFlightDays
     ?? 0
-  const canPlay = playbackEndDay > 0 && routePlanStatus !== 'review'
+  const plannedRouteIsExecutable = !plannedRoute || plannedRoute.summary.feasibleWithConfiguredBurn
+  const canPlay = playbackEndDay > 0 && routePlanStatus !== 'review' && plannedRouteIsExecutable
   const activeStartDate = plannedRoute?.startDate ?? visibleMissionResult?.config.startDate ?? draft.startDate
 
   useEffect(() => {
@@ -343,10 +433,6 @@ export function ThreeDView({
     return () => window.removeEventListener('resize', adaptSidebarsToViewport)
   }, [])
 
-  useEffect(() => {
-    if (canPlay && elapsedDays >= playbackEndDay && playing) setPlaying(false)
-  }, [canPlay, elapsedDays, playbackEndDay, playing])
-
   const selectedMoons = useMemo(
     () => selectedPlanet && moonCatalogue
       ? moonCatalogue.moons.filter((moon) => moon.parentId === selectedPlanet.id)
@@ -367,6 +453,181 @@ export function ThreeDView({
       ?? plannedRoute.segments.at(-1)
       ?? null
   }, [elapsedDays, plannedRoute])
+  const playbackStateAtDay = useCallback((day: number): PlaybackStateSnapshot => {
+    if (plannedRoute?.trajectory.length) return routeStateAtDay(plannedRoute, day)
+    if (visibleMissionResult?.trajectory.length) {
+      const point = pointAtDay(visibleMissionResult, day)
+      return {
+        positionKm: point.positionKm,
+        velocityKmS: point.velocityKmS,
+        phase: point.phase,
+        massKg: point.massKg,
+      }
+    }
+    return { positionKm: [0, 0, 0] }
+  }, [plannedRoute, visibleMissionResult])
+  const playbackSectionAtDay = useCallback((day: number) => {
+    if (plannedRoute?.trajectory.length && plannedRoute.segments?.length) {
+      const pointIndex = plannedRoute.trajectory.reduce(
+        (selected, point, index) => point.elapsedDays <= day ? index : selected,
+        0,
+      )
+      return plannedRoute.segments.find(
+        (segment) => pointIndex >= segment.startIndex && pointIndex <= segment.endIndex,
+      ) ?? plannedRoute.segments.at(-1) ?? null
+    }
+    const phase = visibleMissionResult ? pointAtDay(visibleMissionResult, day).phase : undefined
+    return phase ? { id: phase, label: phase.replaceAll('_', ' ') } : null
+  }, [plannedRoute, visibleMissionResult])
+  const appendPlaybackEvent = useCallback((
+    eventType: PlaybackEventType,
+    day: number,
+    details: Record<string, unknown> = {},
+  ) => {
+    const playbackId = playbackAuditIdRef.current
+    if (!playbackId) return
+    const section = playbackSectionAtDay(day)
+    playbackAuditSequenceRef.current += 1
+    void appendPlaybackAuditEvent({
+      playbackId,
+      sequence: playbackAuditSequenceRef.current,
+      eventType,
+      missionDay: day,
+      simulatedDateTimeUtc: new Date(
+        new Date(`${activeStartDate}T00:00:00Z`).getTime() + day * 86_400_000,
+      ).toISOString(),
+      sectionId: section?.id,
+      sectionLabel: section?.label,
+      state: playbackStateAtDay(day),
+      details,
+    }).catch((error: Error) => setPlaybackAuditError(error.message))
+  }, [activeStartDate, playbackSectionAtDay, playbackStateAtDay])
+  const toggleMissionPlayback = useCallback(async () => {
+    if (!canPlay || playbackAuditStatus === 'starting') return
+    if (playing) {
+      setPlaying(false)
+      setPlaybackAuditStatus('paused')
+      appendPlaybackEvent('paused', elapsedDays, { reason: 'user' })
+      return
+    }
+    let startDay = elapsedDays
+    if (elapsedDays >= playbackEndDay || playbackAuditStatus === 'complete' || playbackAuditStatus === 'reset') {
+      startDay = 0
+      setElapsedDays(0)
+      playbackAuditIdRef.current = null
+    }
+    if (playbackAuditIdRef.current) {
+      appendPlaybackEvent('resumed', startDay)
+      setPlaybackAuditStatus('recording')
+      setPlaying(true)
+      return
+    }
+    setPlaybackAuditStatus('starting')
+    setPlaybackAuditError(null)
+    try {
+      const lastSection = routeSections.at(-1)
+      const started = await startPlaybackAudit({
+        routeAuditRunId: plannedRoute?.audit?.runId,
+        startDate: activeStartDate,
+        playbackEndDay,
+        originId: routeSections[0]?.originId ?? 'earth',
+        targetId: lastSection?.targetId ?? plannedRoute?.waypoint.id ?? selectedTargetId,
+        routeSectionIds: routeSections.map((section) => section.id),
+        missionConfig: draft,
+        routeSections,
+        state: playbackStateAtDay(startDay),
+      })
+      playbackAuditIdRef.current = started.playbackId
+      playbackAuditSequenceRef.current = 0
+      playbackAuditLastCheckpointDayRef.current = startDay
+      playbackAuditLastSectionIdRef.current = playbackSectionAtDay(startDay)?.id ?? null
+      setPlaybackAuditStatus('recording')
+      setPlaying(true)
+    } catch (error) {
+      setPlaybackAuditStatus('idle')
+      setPlaybackAuditError(error instanceof Error ? error.message : 'Missionslauf-Log konnte nicht gestartet werden.')
+    }
+  }, [
+    activeStartDate,
+    appendPlaybackEvent,
+    canPlay,
+    draft,
+    elapsedDays,
+    playbackAuditStatus,
+    playbackEndDay,
+    playbackSectionAtDay,
+    playbackStateAtDay,
+    plannedRoute,
+    playing,
+    routeSections,
+    selectedTargetId,
+  ])
+  const seekMissionPlayback = useCallback((day: number) => {
+    const boundedDay = Math.max(0, Math.min(playbackEndDay, day))
+    if (playing) setPlaying(false)
+    if (playbackAuditIdRef.current) {
+      appendPlaybackEvent('seek', boundedDay, { fromMissionDay: elapsedDays })
+      setPlaybackAuditStatus('paused')
+    }
+    setElapsedDays(boundedDay)
+  }, [appendPlaybackEvent, elapsedDays, playbackEndDay, playing])
+  const resetMissionPlayback = useCallback(() => {
+    if (playbackAuditIdRef.current && playbackAuditStatus !== 'complete') {
+      appendPlaybackEvent('reset', elapsedDays, { reason: 'user' })
+    }
+    playbackAuditIdRef.current = null
+    setPlaybackAuditStatus('reset')
+    setElapsedDays(0)
+    setPlaying(false)
+  }, [appendPlaybackEvent, elapsedDays, playbackAuditStatus])
+  const abortActivePlayback = useCallback((reason: string) => {
+    if (playbackAuditIdRef.current && playbackAuditStatus !== 'complete') {
+      appendPlaybackEvent('aborted', elapsedDays, { reason })
+    }
+    playbackAuditIdRef.current = null
+    setPlaybackAuditStatus('idle')
+    setPlaying(false)
+  }, [appendPlaybackEvent, elapsedDays, playbackAuditStatus])
+
+  useEffect(() => {
+    if (!playing || !playbackAuditIdRef.current) return
+    const section = playbackSectionAtDay(elapsedDays)
+    const sectionChanged = Boolean(
+      section?.id && section.id !== playbackAuditLastSectionIdRef.current,
+    )
+    const checkpointIntervalDays = Math.max(0.1, playbackEndDay / 500)
+    const checkpointDue = (
+      elapsedDays - playbackAuditLastCheckpointDayRef.current >= checkpointIntervalDays
+      || elapsedDays >= playbackEndDay
+    )
+    if (!sectionChanged && !checkpointDue) return
+    playbackAuditLastCheckpointDayRef.current = elapsedDays
+    playbackAuditLastSectionIdRef.current = section?.id ?? null
+    appendPlaybackEvent(
+      sectionChanged ? 'section-entered' : 'checkpoint',
+      elapsedDays,
+    )
+  }, [appendPlaybackEvent, elapsedDays, playbackEndDay, playbackSectionAtDay, playing])
+
+  useEffect(() => {
+    if (!canPlay || elapsedDays < playbackEndDay || !playing) return
+    setPlaying(false)
+    if (playbackAuditIdRef.current) {
+      appendPlaybackEvent('target-reached', playbackEndDay, {
+        targetId: routeSections.at(-1)?.targetId ?? plannedRoute?.waypoint.id ?? selectedTargetId,
+      })
+      setPlaybackAuditStatus('complete')
+    }
+  }, [
+    appendPlaybackEvent,
+    canPlay,
+    elapsedDays,
+    playbackEndDay,
+    plannedRoute,
+    playing,
+    routeSections,
+    selectedTargetId,
+  ])
   const encounterPlanetRadius = useMemo(() => {
     if (!data) return 0.01
     const planet = data.planets.find((candidate) => candidate.id === waypointId)
@@ -442,6 +703,7 @@ export function ThreeDView({
   }, [data, optimizationResult, visual.inclinationScale, visual.orbitScale, waypointId])
 
   const invalidateRoutePlan = () => {
+    abortActivePlayback('route-invalidated')
     clearPendingRouteSketch()
     setEntryCorridorEditorOpen(false)
     setRoutePlanStatus('hidden')
@@ -453,6 +715,7 @@ export function ThreeDView({
     setRouteTransformMode('translate')
     setRouteSketchDragging(false)
     setPlannedMissionDate(null)
+    setOptimizationPreflight(null)
   }
 
   const freshRouteSketch = () => routePlanNodes ? createRouteSketch(routePlanNodes) : null
@@ -477,7 +740,7 @@ export function ThreeDView({
   }
   const activateRouteDrawing = () => {
     setMissionPlannerOpen(true)
-    setPlaying(false)
+    abortActivePlayback('route-editing')
     setEntryCorridorEditorOpen(false)
     if (!routeSketch || routePlanStatus === 'hidden') {
       beginRouteReview()
@@ -672,11 +935,12 @@ export function ThreeDView({
     setPlannedRoute(null)
     setDirectSolarRoute(null)
     setOptimizationResult(null)
+    setOptimizationPreflight(null)
     clearPendingRouteSketch()
   }
   const applySimulation = async () => {
     try {
-      setPlaying(false)
+      abortActivePlayback('simulation-recalculated')
       setSimulationError(null)
       const nextResult = await requestMissionSimulation(draft)
       setResult(nextResult)
@@ -702,10 +966,11 @@ export function ThreeDView({
     aimpointAltitudeKm,
   ])
   const calculateWaypointRoute = async () => {
-    if (!selectedTarget) {
+    if (!selectedTarget && routeSections.length === 0) {
       setRouteError('Bitte zuerst ein interstellares Ziel wählen.')
       return
     }
+    abortActivePlayback('route-recalculated')
     setRouteLoading(true)
     setRouteError(null)
     setDirectSolarRoute(null)
@@ -721,8 +986,8 @@ export function ThreeDView({
           encounterDay,
           flybyAltitudeKm,
           flybyMode,
-          targetRightAscensionDeg: selectedTarget.rightAscensionDeg,
-          targetDeclinationDeg: selectedTarget.declinationDeg,
+          targetRightAscensionDeg: selectedTarget?.rightAscensionDeg,
+          targetDeclinationDeg: selectedTarget?.declinationDeg,
           desiredSolarExitSpeedKmS,
           highFidelityNBody,
           flybyAimpoint: aimpointPayload,
@@ -761,6 +1026,19 @@ export function ThreeDView({
     setOptimizationLoading(true)
     setRouteError(null)
     try {
+      const preflight = await requestSolarEnergyAssessment({
+        mission: draft,
+        desiredSolarExitSpeedKmS,
+      })
+      setOptimizationPreflight(preflight)
+      if (!preflight.energeticallyReachable) {
+        setOptimizationResult(null)
+        setDirectSolarRoute(null)
+        setShowAlternativeRoutes(false)
+        setPlaying(false)
+        return
+      }
+      setOptimizationPreflight(null)
       const optimized = await requestLaunchOptimization({
         mission: draft,
         waypointId,
@@ -779,6 +1057,15 @@ export function ThreeDView({
         maxFullValidations: 8,
       })
       setOptimizationResult(optimized)
+      if (!optimized.plausible) {
+        // A numerically converged search minimum is not automatically a
+        // flyable mission. Keep the last confirmed route visible and expose
+        // this run only as a diagnostic recommendation.
+        setDirectSolarRoute(null)
+        setShowAlternativeRoutes(false)
+        setPlaying(false)
+        return
+      }
       // Feed the converged boundary values back into the three coupled input
       // parameters. The result still retains the original requested plan for
       // comparison and audit, while a following run continues from the found
@@ -829,6 +1116,7 @@ export function ThreeDView({
     waypointId,
   ])
   const resetAll = () => {
+    abortActivePlayback('all-reset')
     clearPendingRouteSketch()
     const defaults = { ...DEFAULT_MISSION_CONFIG, startDate: new Date().toISOString().slice(0, 10) }
     setDraft(defaults)
@@ -929,7 +1217,7 @@ export function ThreeDView({
             fadeStrength={1.4}
             side={THREE.DoubleSide}
           />}
-          <Sun sun={data.sun} sizeScale={visual.planetScale} />
+          <Sun sun={data.sun} orbitScale={visual.orbitScale} sizeScale={visual.planetScale} />
           <InterstellarTargets
             targets={INTERSTELLAR_TARGETS}
             selectedId={selectedTargetId}
@@ -1067,10 +1355,26 @@ export function ThreeDView({
               </optgroup>
             </select>
           </label>
+          {routeSections.length === 0
+            ? (
+              <button className="quick-route-calculate" type="button" onClick={onOpenRoutePlanner}>
+                Route anlegen
+              </button>
+            )
+            : routePlanStatus !== 'review' && (
+            <button
+              className="quick-route-calculate"
+              type="button"
+              disabled={routeLoading || (corridorBlocked && !corridorRequiresDynamicCheck)}
+              onClick={() => void calculateWaypointRoute()}
+            >
+              {routeLoading ? 'Berechnet …' : 'Bahn berechnen'}
+            </button>
+            )}
           <button
             className={routePlanStatus === 'review' ? 'active' : ''}
             type="button"
-            disabled={!selectedTarget || routeLoading}
+            disabled={!selectedTarget || routeLoading || !routePlanNodes}
             aria-pressed={routePlanStatus === 'review'}
             onClick={activateRouteDrawing}
           >
@@ -1123,7 +1427,7 @@ export function ThreeDView({
             <button className="quick-route-calculate" type="button" disabled={routeLoading || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={() => void calculateWaypointRoute()}>{routeLoading ? 'Berechnet …' : 'Bahn berechnen'}</button>
           </>}
           {routePlanStatus !== 'review' && <>
-            <button className={playing ? 'active' : ''} type="button" disabled={!canPlay} onClick={() => setPlaying((active) => !active)}>{playing ? 'Pause' : 'Mission abspielen'}</button>
+            <button className={playing ? 'active' : ''} type="button" disabled={!canPlay || playbackAuditStatus === 'starting'} onClick={() => void toggleMissionPlayback()}>{playing ? 'Pause' : playbackAuditStatus === 'starting' ? 'Log startet …' : 'Mission abspielen'}</button>
             <button className={showMoons ? 'active' : ''} type="button" aria-pressed={showMoons} onClick={() => setShowMoons((visible) => !visible)}>Monde · {showMoons ? 'an' : 'aus'}</button>
             <button type="button" disabled={!canPlay} onClick={() => setSelectedObject('probe')}>Sonde</button>
           </>}
@@ -1134,7 +1438,7 @@ export function ThreeDView({
           className="target-controls"
           ariaLabel="Missionsplanung und KI-Navigation"
           draggable={false}
-          header={<div className="target-panel-title"><strong>Missionsplanung</strong><small>{selectedTarget?.name ?? 'Kein interstellares Ziel'} → {data.planets.find((planet) => planet.id === waypointId)?.name ?? waypointId}</small></div>}
+          header={<div className="target-panel-title"><strong>Missionsplanung</strong><small>{routeSections.length === 0 ? 'Blanko-Projekt · keine Route' : `${selectedTarget?.name ?? 'Kein interstellares Ziel'} → ${data.planets.find((planet) => planet.id === waypointId)?.name ?? waypointId}`}</small></div>}
         >
           <div className="target-controls-body">
           <details className="target-control-section planner-simulation" open>
@@ -1143,10 +1447,18 @@ export function ThreeDView({
               <div className="planner-field-group">
                 <strong className="planner-group-title">Zeitsteuerung</strong>
                 <div className="transport-controls">
-                  <button type="button" disabled={!canPlay} onClick={() => setPlaying((active) => !active)}>{playing ? 'Pause' : 'Play'}</button>
-                  <button type="button" disabled={!canPlay} onClick={() => setElapsedDays((current) => Math.min(playbackEndDay, current + stepDays))}>+ Schritt</button>
-                  <button type="button" onClick={() => { setElapsedDays(0); setPlaying(false) }}>Zeit zurück</button>
+                  <button type="button" disabled={!canPlay || playbackAuditStatus === 'starting'} onClick={() => void toggleMissionPlayback()}>{playing ? 'Pause' : playbackAuditStatus === 'starting' ? 'Log startet …' : 'Play'}</button>
+                  <button type="button" disabled={!canPlay} onClick={() => seekMissionPlayback(elapsedDays + stepDays)}>+ Schritt</button>
+                  <button type="button" onClick={resetMissionPlayback}>Zeit zurück</button>
                 </div>
+                <div className={`playback-log-status playback-log-${playbackAuditStatus}`}>
+                  <strong>Missionslauf-Log</strong>
+                  <span>{playbackAuditStatus === 'recording' ? 'zeichnet auf' : playbackAuditStatus === 'paused' ? 'pausiert' : playbackAuditStatus === 'complete' ? 'Ziel erreicht · vollständig' : playbackAuditStatus === 'starting' ? 'wird angelegt' : playbackAuditStatus === 'reset' ? 'zurückgesetzt' : 'bereit'}</span>
+                  {playbackAuditIdRef.current && <small>{playbackAuditIdRef.current}</small>}
+                  <a href="/api/audit/latest-playback" target="_blank" rel="noreferrer">Letzten Lauf ansehen</a>
+                  <a href="/api/audit/playback-log">JSONL herunterladen</a>
+                </div>
+                {playbackAuditError && <div className="validation-box" role="alert">Logfehler: {playbackAuditError}</div>}
                 <label className="range-field">
                   <span>Missionstag<output>{elapsedDays.toFixed(1)} / {playbackEndDay.toFixed(1)}</output></span>
                   <input
@@ -1156,7 +1468,7 @@ export function ThreeDView({
                     step="0.1"
                     value={Math.min(elapsedDays, Math.max(1, playbackEndDay))}
                     disabled={!canPlay}
-                    onChange={(event) => { setElapsedDays(Math.max(0, Math.min(playbackEndDay, event.target.valueAsNumber))); setPlaying(false) }}
+                    onChange={(event) => seekMissionPlayback(event.target.valueAsNumber)}
                   />
                 </label>
                 <label className="range-field">
@@ -1210,9 +1522,20 @@ export function ThreeDView({
           </label>
           {selectedTarget && <span>RA {selectedTarget.rightAscensionDeg.toFixed(2)}° · Dec {selectedTarget.declinationDeg.toFixed(2)}° · Klickbare Zielmarke im View</span>}
           <label>
-            <span>Wegpunkt</span>
-            <select value={waypointId} onChange={(event) => { setWaypointId(event.target.value); invalidateRoutePlan(); setPlannedRoute(null); setDirectSolarRoute(null); setOptimizationResult(null) }}>
-              {data.planets.filter((planet) => planet.id !== 'earth').map((planet) => <option key={planet.id} value={planet.id}>{planet.name}</option>)}
+            <span>Zielkörper des aktiven Abschnitts</span>
+            <select aria-label="Zielkörper des aktiven Abschnitts" value={waypointId} onChange={(event) => { setWaypointId(event.target.value); invalidateRoutePlan(); setPlannedRoute(null); setDirectSolarRoute(null); setOptimizationResult(null) }}>
+              {routeSections.length === 0 && <option value="" disabled>Kein Abschnitt angelegt</option>}
+              <optgroup label="Sonnensystem">
+                <option value="sun">Sonne</option>
+                {data.planets.map((planet) => <option key={planet.id} value={planet.id}>{planet.name}</option>)}
+              </optgroup>
+              <optgroup label="Monde">
+                {moonCatalogue.moons.filter((moon) => moon.semiMajorAxisKm && moon.orbitalPeriodDays).map((moon) => (
+                  <option key={moon.id} value={moon.id}>
+                    {data.planets.find((planet) => planet.id === moon.parentId)?.name ?? moon.parentId} · {moon.name}
+                  </option>
+                ))}
+              </optgroup>
             </select>
           </label>
           </div>
@@ -1318,7 +1641,7 @@ export function ThreeDView({
             </div>
           </details>
           <details className="target-control-section">
-            <summary><span>KI-Randwertsuche</span><small>{optimizationLoading ? 'rechnet …' : optimizationResult ? `${optimizationResult.minimumConfidencePct.toFixed(1)} %` : 'optional'}</small></summary>
+            <summary><span>KI-Randwertsuche</span><small>{optimizationLoading ? 'prüft …' : optimizationPreflight && !optimizationPreflight.energeticallyReachable ? 'Ziel außerhalb Budget' : optimizationResult ? (optimizationResult.plausible ? 'flugfähig' : 'keine Freigabe') : 'optional'}</small></summary>
             <div className="target-control-section-content">
           <div className="ai-integrated-block">
           <div className="optimizer-divider"><strong>KI-gestützte Randwertsuche</strong><span>vorwärts + rückwärts · Mehrpass 12/8</span></div>
@@ -1331,34 +1654,102 @@ export function ThreeDView({
           <button className="ai-primary-action" type="button" disabled={optimizationLoading || routeLoading || routePlanStatus !== 'confirmed' || corridorBlocked} onClick={() => void optimizeLaunchWindow()}>{optimizationLoading ? 'KI koppelt Sonne, Jupiter und Ziel …' : routePlanStatus === 'confirmed' ? 'Route mit KI bidirektional optimieren' : 'Zuerst Routenplan bestätigen'}</button>
           <label className="optimizer-check"><span>Zyklisch neu rechnen</span><input type="checkbox" checked={autoReoptimize} onChange={(event) => setAutoReoptimize(event.target.checked)} /></label>
           {autoReoptimize && <label><span>Intervall (min)</span><input type="number" min="1" step="1" value={recalculationMinutes} onChange={(event) => setRecalculationMinutes(event.target.valueAsNumber)} /></label>}
+          {optimizationPreflight && !optimizationPreflight.energeticallyReachable && (
+            <div className="optimizer-result optimizer-result-blocked">
+              <div className="optimizer-result-status">
+                <strong>Keine Suche gestartet</strong>
+                <span>Die harte Antriebsgrenze wurde vor der Kalendersuche erkannt. Die bestätigte Route bleibt unverändert.</span>
+              </div>
+              <div className="optimizer-limit-card">
+                <strong>Hauptursache · Zielgeschwindigkeit außerhalb des Antriebsbudgets</strong>
+                <span>Gewünscht: {optimizationPreflight.desiredExitSpeedKmS.toFixed(1)} km/s bei 1 AE</span>
+                <span>Mit {optimizationPreflight.availableOberthDeltaVKmS.toFixed(1)} km/s Oberth-Δv erreichbar: höchstens {optimizationPreflight.maximumExitSpeedWithAvailableBurnKmS.toFixed(1)} km/s</span>
+                <span>Für das aktuelle Ziel erforderlich: mindestens {optimizationPreflight.minimumOberthDeltaVForDesiredSpeedKmS.toFixed(1)} km/s Oberth-Δv</span>
+                <div className="optimizer-remedies">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDesiredSolarExitSpeedKmS(Math.floor(optimizationPreflight.maximumExitSpeedWithAvailableBurnKmS))
+                      invalidateRoutePlan()
+                    }}
+                  >
+                    Ziel auf erreichbare Geschwindigkeit setzen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const requiredDeltaV = Math.ceil(optimizationPreflight.minimumOberthDeltaVForDesiredSpeedKmS * 10) / 10
+                      setDraft((current) => ({ ...current, oberthDeltaVKmS: requiredDeltaV }))
+                      invalidateRoutePlan()
+                    }}
+                  >
+                    Erforderliches Oberth-Δv übernehmen
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {optimizationResult && (
-            <div className="optimizer-result">
-              <strong>Suchstart: Datum {optimizationResult.requestedPlan.startDate} · erste Begegnungsschätzung Tag {optimizationResult.requestedPlan.encounterDay.toFixed(1)} ({formatMissionDate(optimizationResult.requestedPlan.encounterDate)})</strong>
-              <span>Nur Suchstart – keine Sollvorgabe, keine Freigabebedingung und kein eigener Vollmodell-Kandidat.</span>
-              <strong className="route-ok">Begegnung wird erreicht am {formatMissionDate(optimizationResult.optimizedEncounterDate)} · Start {optimizationResult.optimizedStartDate} · Missionstag {optimizationResult.optimizedEncounterDay.toFixed(1)}</strong>
-              <span>Optimierter Suchhorizont ±{optimizationResult.optimizedSearchWindowDays.toFixed(0)} Tage · vollständig untersucht bis ±{optimizationResult.searchStrategy.exploredHorizonDays.toFixed(0)} Tage · Raster {optimizationResult.searchStrategy.refinementStepsDays.join(' → ')} Tage</span>
-              <span className={optimizationResult.geometryPlausible ? 'route-ok' : 'route-warning'}>{optimizationResult.geometryPlausible ? 'Geometrie grün: Einspritzung, Jupiter-Kopplung, Zielwinkel und Zielfortschritt sind erfüllt.' : 'Die gekoppelte Fluggeometrie hat noch mindestens einen offenen Grenzwert.'}</span>
-              <span className={optimizationResult.solarEnergyFeasibility.energeticallyReachable ? 'route-ok' : 'route-warning'}>Antriebsgrenze: höchstens {optimizationResult.solarEnergyFeasibility.maximumExitSpeedWithAvailableBurnKmS.toFixed(2)} km/s bei 1 AE · für {optimizationResult.solarEnergyFeasibility.desiredExitSpeedKmS.toFixed(2)} km/s sind mindestens {optimizationResult.solarEnergyFeasibility.minimumOberthDeltaVForDesiredSpeedKmS.toFixed(2)} km/s Oberth-Δv nötig ({optimizationResult.solarEnergyFeasibility.availableOberthDeltaVKmS.toFixed(2)} km/s verfügbar) · kein elektrischer Leistungswert.</span>
-              <span>Bidirektional gekoppelt: Sonne → Jupiter vorwärts, Ziel → Jupiter rückwärts · Randrest {(optimizationResult.bidirectionalSearch.jupiterMatch?.boundaryVelocityResidualKmS ?? 0).toFixed(3)} km/s</span>
-              {optimizationResult.bidirectionalSearch.solarEntry && <span>Sonneneintritt {optimizationResult.bidirectionalSearch.solarEntry.entryDate} · Perihel {new Date(optimizationResult.bidirectionalSearch.solarEntry.perihelionDateTime).toLocaleString('de-DE')} · Austritt {optimizationResult.bidirectionalSearch.solarEntry.actualExitSpeedKmS.toFixed(2)} / {optimizationResult.bidirectionalSearch.desiredSolarExitSpeedKmS.toFixed(2)} km/s bei 1 AE</span>}
-              <span className={optimizationResult.bidirectionalSearch.postFlybyTargetProgressMonotonic ? 'route-ok' : 'route-warning'}>{optimizationResult.bidirectionalSearch.postFlybyTargetProgressMonotonic ? 'Nach Jupiter nimmt der Zielweg durchgehend zu.' : 'Nach Jupiter enthält die Bahn noch einen Abschnitt entgegen dem Zielkorridor.'}</span>
-              {(optimizationResult.planComparison.startDateChanged || optimizationResult.planComparison.encounterDayChanged) && (
-                <span>Verschiebung gegenüber der Ausgangsschätzung: Start {optimizationResult.planComparison.startDateDeltaDays >= 0 ? '+' : ''}{optimizationResult.planComparison.startDateDeltaDays.toFixed(0)} Tage · Flugzeit {optimizationResult.planComparison.encounterDayDelta >= 0 ? '+' : ''}{optimizationResult.planComparison.encounterDayDelta.toFixed(1)} Tage</span>
+            <div className={`optimizer-result optimizer-result-${optimizationResult.plausible ? 'success' : 'blocked'}`}>
+              <div className="optimizer-result-status">
+                <strong>{optimizationResult.plausible ? 'Flugfähige Route gefunden' : 'Keine flugfähige Route gefunden'}</strong>
+                <span>{optimizationResult.plausible ? 'Vollmodell und Antriebsbudget sind erfüllt.' : 'Die bisher bestätigte Route bleibt unverändert. Dieses Suchminimum wird nicht als Mission übernommen.'}</span>
+              </div>
+              {!optimizationResult.solarEnergyFeasibility.energeticallyReachable && (
+                <div className="optimizer-limit-card">
+                  <strong>Hauptursache · Zielgeschwindigkeit außerhalb des Antriebsbudgets</strong>
+                  <span>Gewünscht: {optimizationResult.solarEnergyFeasibility.desiredExitSpeedKmS.toFixed(1)} km/s bei 1 AE</span>
+                  <span>Mit {optimizationResult.solarEnergyFeasibility.availableOberthDeltaVKmS.toFixed(1)} km/s Oberth-Δv erreichbar: höchstens {optimizationResult.solarEnergyFeasibility.maximumExitSpeedWithAvailableBurnKmS.toFixed(1)} km/s</span>
+                  <span>Für das aktuelle Ziel erforderlich: mindestens {optimizationResult.solarEnergyFeasibility.minimumOberthDeltaVForDesiredSpeedKmS.toFixed(1)} km/s Oberth-Δv</span>
+                  <div className="optimizer-remedies">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDesiredSolarExitSpeedKmS(Math.floor(optimizationResult.solarEnergyFeasibility.maximumExitSpeedWithAvailableBurnKmS))
+                        setOptimizationResult(null)
+                        invalidateRoutePlan()
+                      }}
+                    >
+                      Ziel auf erreichbare Geschwindigkeit setzen
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const requiredDeltaV = Math.ceil(optimizationResult.solarEnergyFeasibility.minimumOberthDeltaVForDesiredSpeedKmS * 10) / 10
+                        setDraft((current) => ({ ...current, oberthDeltaVKmS: requiredDeltaV }))
+                        setOptimizationResult(null)
+                        invalidateRoutePlan()
+                      }}
+                    >
+                      Erforderliches Oberth-Δv übernehmen
+                    </button>
+                  </div>
+                </div>
               )}
-              <span className={optimizationResult.plausible ? 'route-ok' : 'route-warning'}>{optimizationResult.plausible ? 'Das Optimum erfüllt alle Plausibilitätskriterien.' : 'Das angezeigte Optimum ist das beste Suchminimum, aber noch nicht flugfähig.'}</span>
-              <span>{optimizationResult.minimumConfidencePct.toFixed(1)} % numerische Konvergenz · {optimizationResult.iterations} echte Suchdurchläufe in {optimizationResult.searchStrategy.refinementStepsDays.length} Rasterstufen · {optimizationResult.evaluations} Kandidaten</span>
-              <span>{optimizationResult.fullValidationCandidates.length} Kandidaten mit dem vollständigen Bahnmodell geprüft · {optimizationResult.stopReason === 'plausible-route-found' ? 'Plausibilitätskriterien erfüllt' : optimizationResult.stopReason === 'solar-energy-boundary-unreachable-with-configured-burn' ? 'Geometriesuche erfüllt; die Antriebs-Δv-Grenze verhindert die Flugfreigabe' : 'Suchgrenzen ohne flugfähige Route ausgeschöpft'}</span>
-              <span className={optimizationResult.route.summary.feasibleWithConfiguredBurn ? 'route-ok' : 'route-warning'}>{optimizationResult.route.summary.feasibleWithConfiguredBurn ? 'Konfiguration erfüllt den Δv-Test.' : 'Startfenster konvergiert, aber das konfigurierte Δv reicht noch nicht.'}</span>
-              {!optimizationResult.plausible && optimizationResult.fullValidationCandidates.find((candidate) => candidate.startDate === optimizationResult.optimizedStartDate && Math.abs(candidate.encounterDay - optimizationResult.optimizedEncounterDay) < 0.01)?.rejectionReasons.map((reason) => <span className="route-warning" key={`optimum-${reason}`}>Optimum-Ablehnung: {reason}</span>)}
-              <span>Navigator-Audit {optimizationResult.audit.runId} · <a href="/api/audit/latest-optimizer" target="_blank" rel="noreferrer">Entscheidungsweg</a> · <a href="/api/audit/optimizer-log">JSONL-Log</a></span>
+              <div className="optimizer-check-summary">
+                <span className={optimizationResult.geometryPlausible ? 'route-ok' : 'route-warning'}>{optimizationResult.geometryPlausible ? '✓ Gekoppelte Fluggeometrie bestanden' : '✕ Gekoppelte Fluggeometrie im Vollmodell nicht bestanden'}</span>
+                <span className={optimizationResult.solarEnergyFeasibility.energeticallyReachable ? 'route-ok' : 'route-warning'}>{optimizationResult.solarEnergyFeasibility.energeticallyReachable ? '✓ Antriebsbudget bestanden' : '✕ Antriebsbudget nicht bestanden'}</span>
+                <span>{optimizationResult.minimumConfidencePct.toFixed(1)} % numerische Konvergenz · {optimizationResult.evaluations} Kandidaten · {optimizationResult.fullValidationCandidates.length} Vollmodellprüfungen</span>
+              </div>
+              <details className="optimizer-technical-details">
+                <summary>Technische Diagnose und Rechennachweis</summary>
+                <span>Bestes Suchminimum: Start {optimizationResult.optimizedStartDate} · Begegnung {formatMissionDate(optimizationResult.optimizedEncounterDate)} · Missionstag {optimizationResult.optimizedEncounterDay.toFixed(1)}</span>
+                <span>Suchbereich ±{optimizationResult.searchStrategy.exploredHorizonDays.toFixed(0)} Tage · Raster {optimizationResult.searchStrategy.refinementStepsDays.join(' → ')} Tage</span>
+                <span>Jupiter-Randrest {(optimizationResult.bidirectionalSearch.jupiterMatch?.boundaryVelocityResidualKmS ?? 0).toFixed(3)} km/s · Zielfortschritt {optimizationResult.bidirectionalSearch.postFlybyTargetProgressMonotonic ? 'monoton' : 'nicht monoton'}</span>
+                {!optimizationResult.plausible && optimizationResult.fullValidationCandidates.find((candidate) => candidate.startDate === optimizationResult.optimizedStartDate && Math.abs(candidate.encounterDay - optimizationResult.optimizedEncounterDay) < 0.01)?.rejectionReasons.map((reason) => <span className="route-warning" key={`optimum-${reason}`}>{reason}</span>)}
+                <span>Navigator-Audit {optimizationResult.audit.runId} · <a href="/api/audit/latest-optimizer" target="_blank" rel="noreferrer">Entscheidungsweg</a> · <a href="/api/audit/optimizer-log">JSONL-Log</a></span>
+              </details>
             </div>
           )}
           {optimizationResult?.alternatives && (
             <div className="route-alternatives">
-              <strong>{optimizationResult.alternatives.recommendationFeasible ? 'Empfehlung' : 'Beste getestete Variante – noch nicht flugfähig'}: {optimizationResult.alternatives.recommended === 'gravityAssist' ? `${waypointId}-Swing-by` : 'direkter Solar-Oberth-Kurs'}</strong>
-              <span>A · Planet: Start {optimizationResult.alternatives.gravityAssist.startDate} · Zielrest {optimizationResult.alternatives.gravityAssist.route.summary.targetAlignmentDeg.toFixed(1)}° · {optimizationResult.alternatives.gravityAssist.feasible ? 'Δv ausreichend' : 'Δv nicht ausreichend'}</span>
-              <span>B · Direkt: Start {optimizationResult.alternatives.directSolar.startDate} · Zielrest {optimizationResult.alternatives.directSolar.route.summary.finalTargetAlignmentDeg.toFixed(1)}° · Zielbreite {optimizationResult.alternatives.directSolar.route.summary.targetEclipticLatitudeDeg.toFixed(1)}° · {optimizationResult.alternatives.directSolar.feasible ? 'Δv ausreichend' : 'Δv nicht ausreichend'}</span>
-              <label className="optimizer-check"><span>Beide Routenvorschläge anzeigen</span><input type="checkbox" checked={showAlternativeRoutes} onChange={(event) => setShowAlternativeRoutes(event.target.checked)} /></label>
+              <strong>{optimizationResult.alternatives.recommendationFeasible ? `Flugfähige Empfehlung: ${optimizationResult.alternatives.recommended === 'gravityAssist' ? `${waypointId}-Swing-by` : 'direkter Solar-Oberth-Kurs'}` : 'Keine der beiden Varianten ist mit der aktuellen Konfiguration flugfähig.'}</strong>
+              <details>
+                <summary>Verglichene Varianten</summary>
+                <span>A · Planet: Start {optimizationResult.alternatives.gravityAssist.startDate} · Zielrest {optimizationResult.alternatives.gravityAssist.route.summary.targetAlignmentDeg.toFixed(1)}° · {optimizationResult.alternatives.gravityAssist.feasible ? 'Δv ausreichend' : 'Δv nicht ausreichend'}</span>
+                <span>B · Direkt: Start {optimizationResult.alternatives.directSolar.startDate} · Zielrest {optimizationResult.alternatives.directSolar.route.summary.finalTargetAlignmentDeg.toFixed(1)}° · Zielbreite {optimizationResult.alternatives.directSolar.route.summary.targetEclipticLatitudeDeg.toFixed(1)}° · {optimizationResult.alternatives.directSolar.feasible ? 'Δv ausreichend' : 'Δv nicht ausreichend'}</span>
+              </details>
+              {optimizationResult.alternatives.recommendationFeasible && <label className="optimizer-check"><span>Beide Routenvorschläge anzeigen</span><input type="checkbox" checked={showAlternativeRoutes} onChange={(event) => setShowAlternativeRoutes(event.target.checked)} /></label>}
             </div>
           )}
           </div>
@@ -1379,6 +1770,14 @@ export function ThreeDView({
             <span className={plannedRoute.summary.feasibleWithConfiguredBurn ? 'route-ok' : 'route-warning'}>
               {plannedRoute.summary.feasibleWithConfiguredBurn ? 'Erreichbar' : 'Nicht erreichbar'} · Kurs-Δv {plannedRoute.summary.requiredInjectionDeltaVKmS.toFixed(2)} km/s · Swing-by {plannedRoute.summary.courseChangeDeg?.toFixed(1) ?? '–'}° · Geschwindigkeitsgewinn {plannedRoute.summary.speedGainKmS >= 0 ? '+' : ''}{plannedRoute.summary.speedGainKmS.toFixed(2)} km/s
             </span>
+          )}
+          {plannedRoute?.validation && (
+            <span className={plannedRoute.validation.collisionFree ? 'route-ok' : 'route-warning'}>
+              Sonnenkörper {plannedRoute.validation.collisionFree ? 'frei' : 'geschnitten'} · kleinster Abstand {plannedRoute.validation.minimumSolarRadiusKm.toLocaleString('de-DE', { maximumFractionDigits: 0 })} km · Höhe {plannedRoute.validation.minimumSolarAltitudeKm.toLocaleString('de-DE', { maximumFractionDigits: 0 })} km
+            </span>
+          )}
+          {plannedRoute && !plannedRoute.summary.feasibleWithConfiguredBurn && (
+            <span className="route-warning">Nur Sollroute: Mindestens ein Übergangs-Δv überschreitet das konfigurierte Budget. Die Mission kann deshalb nicht abgespielt werden.</span>
           )}
           {plannedRoute?.summary.warnings?.map((warning) => <span className="route-warning" key={`summary-warning-${warning}`}>⚠ {warning}</span>)}
           {plannedRoute?.warnings?.map((warning) => <span className="route-warning" key={`payload-warning-${warning}`}>⚠ {warning}</span>)}
@@ -1488,7 +1887,7 @@ export function ThreeDView({
         result={plannedRoute ? null : visibleMissionResult}
         elapsedDays={elapsedDays}
         canPlay={canPlay}
-        energyDeficit={optimizationResult?.solarEnergyFeasibility}
+        energyDeficit={optimizationResult?.solarEnergyFeasibility ?? optimizationPreflight ?? undefined}
         onSelectPlanet={selectPlanet}
         onSelectObject={setSelectedObject}
         onSelectMoon={setSelectedMoon}

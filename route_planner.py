@@ -307,7 +307,12 @@ def _stumpff_s(z: float) -> float:
     return 1 / 6
 
 
-def _lambert_candidates(start: tuple, end: tuple, flight_seconds: float) -> list[dict]:
+def _lambert_candidates(
+    start: tuple,
+    end: tuple,
+    flight_seconds: float,
+    gravitational_parameter: float = MU_SUN,
+) -> list[dict]:
     """Return zero-revolution Lambert solutions for both transfer sides."""
     start_radius, end_radius = _magnitude(start), _magnitude(end)
     cosine = max(-1.0, min(1.0, _dot(start, end) / (start_radius * end_radius)))
@@ -329,7 +334,7 @@ def _lambert_candidates(start: tuple, end: tuple, flight_seconds: float) -> list
             if y_value <= 0:
                 return None
             calculated = (y_value / c_value) ** 1.5 * s_value + parameter_a * sqrt(y_value)
-            return calculated - sqrt(MU_SUN) * flight_seconds
+            return calculated - sqrt(gravitational_parameter) * flight_seconds
 
         previous: tuple[float, float] | None = None
         brackets: list[tuple[tuple[float, float], tuple[float, float]]] = []
@@ -366,7 +371,7 @@ def _lambert_candidates(start: tuple, end: tuple, flight_seconds: float) -> list
             c_value, s_value = _stumpff_c(z_value), _stumpff_s(z_value)
             y_value = start_radius + end_radius + parameter_a * (z_value * s_value - 1) / sqrt(c_value)
             f_value = 1 - y_value / start_radius
-            g_value = parameter_a * sqrt(y_value / MU_SUN)
+            g_value = parameter_a * sqrt(y_value / gravitational_parameter)
             if abs(g_value) < 1e-12:
                 continue
             g_dot = 1 - y_value / end_radius
@@ -418,6 +423,7 @@ def _propagate_lambert_segment(
     start_day: float,
     flight_seconds: float,
     sample_count: int,
+    gravitational_parameter: float = MU_SUN,
 ) -> tuple[list[dict], tuple, tuple]:
     """Adaptively propagate the heliocentric Lambert arc for display and audit."""
     initial_state = [*start_position, *start_velocity]
@@ -425,7 +431,7 @@ def _propagate_lambert_segment(
     def derivative(_time: float, state) -> list[float]:
         position = state[:3]
         radius = sqrt(sum(component * component for component in position))
-        acceleration_factor = -MU_SUN / max(radius**3, 1e-18)
+        acceleration_factor = -gravitational_parameter / max(radius**3, 1e-18)
         return [
             state[3], state[4], state[5],
             position[0] * acceleration_factor,

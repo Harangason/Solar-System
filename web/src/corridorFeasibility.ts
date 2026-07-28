@@ -10,13 +10,14 @@ export interface CorridorFeasibility {
   reasons: string[]
   minimumPathClearanceRatio: number
   safetyRadiusRatio: number
+  corridorRadiusRatio: number
   minimumPathClearanceKm: number | null
   safetyRadiusKm: number | null
   gravityReserveKm: number | null
 }
 
 const PLANET_RADIUS_UNITS = 1
-const CORRIDOR_RADIUS_UNITS = 220 / 160
+const MINIMUM_CORRIDOR_RADIUS_UNITS = 220 / 160
 const ORIGIN_X_UNITS = (105 - 635) / 160
 
 type Vector3Tuple = [number, number, number]
@@ -115,7 +116,13 @@ export function evaluateCorridorFeasibility(
 ): CorridorFeasibility {
   const { center, boundaries } = corridorBoundaryDirections(definition)
   const halfThicknessUnits = (10 + definition.verticalHalfAngleDeg * 2.2) / 160
-  const innerRadiusUnits = CORRIDOR_RADIUS_UNITS - halfThicknessUnits
+  const gravityReserveRatio = targetGravityReserveRatio(target)
+  const safetyRadiusRatio = PLANET_RADIUS_UNITS + 0.08 + gravityReserveRatio
+  const corridorRadiusRatio = Math.max(
+    MINIMUM_CORRIDOR_RADIUS_UNITS,
+    safetyRadiusRatio + halfThicknessUnits + 0.06,
+  )
+  const innerRadiusUnits = corridorRadiusRatio - halfThicknessUnits
   const minimumPathClearanceRatio = Math.min(...boundaries.map((direction) => {
     return pointToSegmentDistance(
       [0, 0, 0],
@@ -127,8 +134,6 @@ export function evaluateCorridorFeasibility(
       ],
     )
   }))
-  const gravityReserveRatio = targetGravityReserveRatio(target)
-  const safetyRadiusRatio = PLANET_RADIUS_UNITS + 0.08 + gravityReserveRatio
   const clearanceBlocked = minimumPathClearanceRatio <= safetyRadiusRatio
   const sourceAxisSeparationDeg = Math.acos(Math.max(-1, Math.min(1, center[0]))) * 180 / Math.PI
   const behindOrigin = sourceAxisSeparationDeg
@@ -148,6 +153,7 @@ export function evaluateCorridorFeasibility(
     reasons,
     minimumPathClearanceRatio,
     safetyRadiusRatio,
+    corridorRadiusRatio,
     minimumPathClearanceKm: radiusKm ? minimumPathClearanceRatio * radiusKm : null,
     safetyRadiusKm: radiusKm ? safetyRadiusRatio * radiusKm : null,
     gravityReserveKm: radiusKm ? gravityReserveRatio * radiusKm : null,

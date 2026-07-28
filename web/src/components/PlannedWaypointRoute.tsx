@@ -1,10 +1,34 @@
 import { Billboard, Html, Line } from '@react-three/drei'
-import { useEffect, useMemo } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import * as THREE from 'three'
 
 import { AU_KM } from '../missionSimulation'
 import { toScenePosition } from '../orbitalMath'
 import { DraggableInfoLabel } from './DraggableInfoLabel'
+
+function RouteSectionStateLabel({ children, title }: { children: ReactNode; title: string }) {
+  const [expanded, setExpanded] = useState(true)
+
+  return (
+    <div className={`route-section-state-label${expanded ? '' : ' collapsed'}`}>
+      <div className="route-section-state-header">
+        <strong>{title}</strong>
+        <button
+          type="button"
+          className="route-section-state-toggle"
+          data-no-drag
+          aria-label={`${title} Details ${expanded ? 'einklappen' : 'ausklappen'}`}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <span aria-hidden="true">{expanded ? '−' : '+'}</span>
+        </button>
+      </div>
+      {expanded && <div className="route-section-state-body">{children}</div>}
+    </div>
+  )
+}
 
 export interface WaypointRouteResult {
   startDate: string
@@ -241,6 +265,12 @@ export interface WaypointRouteResult {
       velocityKmS: [number, number, number]
     }>
   }
+  validation?: {
+    collisionFree: boolean
+    minimumSolarRadiusKm: number
+    sunRadiusKm: number
+    minimumSolarAltitudeKm: number
+  }
   summary: {
     flybyMode: 'acceleration' | 'observation' | 'multi-section'
     requiredInjectionDeltaVKmS: number
@@ -449,13 +479,17 @@ export function PlannedWaypointRoute({ route, orbitScale, inclinationScale, elap
           opacity={0.98}
         />
       )}
-      {routeProbePosition && <mesh position={routeProbePosition}><octahedronGeometry args={[Math.max(0.045, 0.018 * probeScale), 1]} /><meshStandardMaterial color="#fff4b0" emissive="#ff8d3a" emissiveIntensity={1.35} /></mesh>}
+      {routeProbePosition && <mesh position={routeProbePosition}><octahedronGeometry args={[Math.max(0.012, 0.006 * Math.sqrt(probeScale)), 1]} /><meshStandardMaterial color="#fff4b0" emissive="#ff8d3a" emissiveIntensity={1.35} /></mesh>}
       {route.routeSections?.map((section, index) => {
         const entry = points[section.entryIndex]
         const periapsis = points[section.periapsisIndex]
         const exit = points[section.exitIndex]
         const followingTargetName = route.routeSections?.[index + 1]?.targetName
         if (!entry || !periapsis || !exit) return null
+        const sectionLabel = `${String(index + 1).padStart(2, '0')} · ${section.targetName}-Eintritt`
+        const initialOffset: [number, number] = index % 2 === 0
+          ? [32, -104 - index * 14]
+          : [-232, -88 - index * 14]
         return (
           <group key={`calculated-section-${section.id}`}>
             <mesh position={entry}>
@@ -470,9 +504,13 @@ export function PlannedWaypointRoute({ route, orbitScale, inclinationScale, elap
               <sphereGeometry args={[0.032, 14, 14]} />
               <meshStandardMaterial color="#65ff9a" emissive="#19bd62" emissiveIntensity={0.8} />
             </mesh>
-            <Html center position={entry.clone().add(new THREE.Vector3(0, 0.18 + index * 0.035, 0))}>
-              <span className="route-section-state-label">
-                <strong>{String(index + 1).padStart(2, '0')} · {section.targetName}-Eintritt</strong>
+            <DraggableInfoLabel
+              initialOffset={initialOffset}
+              label={sectionLabel}
+              onDragChange={onInfoDragChange}
+              position={entry}
+            >
+              <RouteSectionStateLabel title={sectionLabel}>
                 <small>
                   Breite {section.entryLatitudeDeg >= 0 ? '+' : ''}{section.entryLatitudeDeg.toFixed(1)}° ·
                   Korridor {section.corridor.entryInsideCorridor ? 'getroffen' : 'verfehlt'}
@@ -487,8 +525,8 @@ export function PlannedWaypointRoute({ route, orbitScale, inclinationScale, elap
                     Restwinkel {(section.lookaheadAlignmentDeg ?? 0).toFixed(1)}°
                   </small>
                 )}
-              </span>
-            </Html>
+              </RouteSectionStateLabel>
+            </DraggableInfoLabel>
           </group>
         )
       })}

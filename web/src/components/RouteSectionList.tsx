@@ -1,12 +1,13 @@
 import { useState } from 'react'
 
 import { ROUTE_INTERSTELLAR_SYSTEMS } from '../interstellarTargets'
-import type { PlanetData } from '../types'
+import type { MoonData, PlanetData } from '../types'
 import type { RouteSectionDefinition } from '../routeSections'
 import { RouteSectionWizard } from './RouteSectionWizard'
 
 interface RouteSectionListProps {
   planets: PlanetData[]
+  moons: MoonData[]
   sections: RouteSectionDefinition[]
   activeSectionId: string
   suggestedOriginId: string
@@ -17,15 +18,17 @@ interface RouteSectionListProps {
   onMove: (sectionId: string, direction: -1 | 1) => void
 }
 
-function objectName(objectId: string, planets: PlanetData[]) {
+function objectName(objectId: string, planets: PlanetData[], moons: MoonData[]) {
   if (objectId === 'sun') return 'Sonne'
   return planets.find((planet) => planet.id === objectId)?.name
+    ?? moons.find((moon) => moon.id === objectId)?.name
     ?? ROUTE_INTERSTELLAR_SYSTEMS.find((system) => system.id === objectId)?.name
     ?? objectId
 }
 
 export function RouteSectionList({
   planets,
+  moons,
   sections,
   activeSectionId,
   suggestedOriginId,
@@ -61,10 +64,8 @@ export function RouteSectionList({
           <tbody>
             {sections.map((section, index) => {
               const isActive = section.id === activeSectionId
-              const previousSection = sections[index - 1]
-              const isDisconnected = Boolean(previousSection && previousSection.targetId !== section.originId)
               return (
-                <tr key={section.id} className={`${isActive ? 'active ' : ''}${isDisconnected ? 'disconnected' : ''}`.trim()}>
+                <tr key={section.id} className={isActive ? 'active' : ''}>
                   <td>
                     <div className="route-section-index-cell">
                       <span className="route-section-number">{String(index + 1).padStart(2, '0')}</span>
@@ -91,13 +92,8 @@ export function RouteSectionList({
                     </div>
                   </td>
                   <td>
-                    <strong>{objectName(section.originId, planets)} → {objectName(section.targetId, planets)}</strong>
+                    <strong>{objectName(section.originId, planets, moons)} → {objectName(section.targetId, planets, moons)}</strong>
                     {isActive && <small>Aktiv in 2D und 3D</small>}
-                    {isDisconnected && previousSection && (
-                      <small className="route-chain-warning">
-                        Verbindung unterbrochen: Ursprung muss {objectName(previousSection.targetId, planets)} sein.
-                      </small>
-                    )}
                   </td>
                   <td>
                     {section.corridor.enabled && section.corridor.blocked
@@ -112,18 +108,24 @@ export function RouteSectionList({
                       <button type="button" className={isActive ? 'selected' : ''} onClick={() => onEdit(section.id)}>
                         {isActive ? 'Aktiv' : 'Bearbeiten'}
                       </button>
-                      <button type="button" className="danger" disabled={sections.length === 1} onClick={() => onDelete(section.id)}>Löschen</button>
+                      <button type="button" className="danger" onClick={() => onDelete(section.id)}>Löschen</button>
                     </div>
                   </td>
                 </tr>
               )
             })}
+            {sections.length === 0 && (
+              <tr className="route-section-empty-row">
+                <td colSpan={5}>Keine Musterroute und keine implizite Abhängigkeit. Das Projekt ist leer.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
       {wizardOpen && (
         <RouteSectionWizard
           planets={planets}
+          moons={moons}
           suggestedOriginId={suggestedOriginId}
           suggestedTargetId={suggestedTargetId}
           onCancel={() => setWizardOpen(false)}
