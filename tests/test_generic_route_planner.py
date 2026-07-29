@@ -1,6 +1,6 @@
 import unittest
 
-from generic_route_planner import SUN_RADIUS_KM, _candidate
+from generic_route_planner import SUN_RADIUS_KM, _candidate, parse_route_passage
 from multi_route_planner import simulate_route_sections
 from trajectory import _magnitude
 
@@ -39,6 +39,44 @@ class GenericRoutePlannerTests(unittest.TestCase):
         self.assertEqual(calculated["targetId"], "sun")
         self.assertEqual(calculated["sectionType"], "heliozentrischer Transfer")
         self.assertLess(calculated["lambertEndpointResidualKm"], 1.0)
+
+    def test_passage_definition_is_normalized_and_preserved(self):
+        requested = section("venus", "sun")
+        requested["passage"] = {
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 135,
+            "orbitDirection": "retrograde",
+            "entryBehavior": "tangential-retrograde",
+            "exitBehavior": "tangential-prograde",
+        }
+
+        calculated = self.calculate([requested])["routeSections"][0]
+
+        self.assertEqual(calculated["passage"], requested["passage"])
+
+    def test_full_orbit_always_uses_360_degrees(self):
+        passage = parse_route_passage({
+            "mode": "full-orbit",
+            "orbitAngleDeg": 12,
+        })
+
+        self.assertEqual(passage["orbitAngleDeg"], 360.0)
+
+    def test_partial_orbit_defaults_to_45_degrees(self):
+        passage = parse_route_passage({
+            "mode": "partial-orbit",
+        })
+
+        self.assertEqual(passage["orbitAngleDeg"], 45.0)
+
+    def test_acceleration_boundary_behavior_is_accepted(self):
+        passage = parse_route_passage({
+            "entryBehavior": "tangential-accelerate",
+            "exitBehavior": "tangential-accelerate",
+        })
+
+        self.assertEqual(passage["entryBehavior"], "tangential-accelerate")
+        self.assertEqual(passage["exitBehavior"], "tangential-accelerate")
 
     def test_planet_to_its_moon_uses_planet_centric_dynamics(self):
         result = self.calculate([section("earth", "earth-moon")])

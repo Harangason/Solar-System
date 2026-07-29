@@ -80,6 +80,11 @@ const WEBGL_RENDERER_OPTIONS: THREE.WebGLRendererParameters = {
 const WEBGL_CAMERA = { position: [46, 38, 58] as [number, number, number], fov: 48, near: 0.0001, far: 2_000 }
 type AimpointRole = 'entry' | 'periapsis' | 'exit' | 'periapsis_point'
 
+function routePassageCalculationBlockReason(routeSections: RouteSectionDefinition[]) {
+  void routeSections
+  return null
+}
+
 function scaledRadius(planet: PlanetData, sunRadiusKm: number, visual: VisualConfig) {
   const readableSunReferenceRadius = 0.85
   return readableSunReferenceRadius * (planet.radiusKm / sunRadiusKm) * visual.planetScale
@@ -179,6 +184,7 @@ export function ThreeDView({
   const [visual, setVisual] = useState<VisualConfig>(DEFAULT_VISUAL_CONFIG)
   const [draft, setDraft] = useState<MissionConfig>(DEFAULT_MISSION_CONFIG)
   const [result, setResult] = useState<MissionResult | null>(null)
+  const [missionResultVisible, setMissionResultVisible] = useState(false)
   const [elapsedDays, setElapsedDays] = useState(0)
   const [playing, setPlaying] = useState(false)
   const pendingMissionConfigRef = useRef<MissionConfig | null | undefined>(undefined)
@@ -195,6 +201,7 @@ export function ThreeDView({
     setDraft(nextMissionConfig)
     setVisual(nextVisualConfig)
     setResult(restoredMissionResult)
+    setMissionResultVisible(false)
     setElapsedDays(0)
     setPlaying(false)
   }, [
@@ -290,6 +297,7 @@ export function ThreeDView({
   const corridorRequiresDynamicCheck = corridorBlocked && routeSections.length > 0
   const corridorBlockMessage = entryCorridor.blockReasons?.join(' ')
     || 'Der Zielkorridor verletzt den Mindestabstand oder liegt auf der vom Ursprung abgewandten Seite.'
+  const routeCalculationBlockReason = routePassageCalculationBlockReason(routeSections)
 
   const handleInfoDragChange = useCallback((label: string, active: boolean) => {
     setActiveInfoDrags((current) => {
@@ -382,7 +390,7 @@ export function ThreeDView({
 
   useEffect(() => clearPendingRouteSketch, [clearPendingRouteSketch])
 
-  const visibleMissionResult = routePlanStatus === 'hidden' ? result : null
+  const visibleMissionResult = missionResultVisible && routePlanStatus === 'hidden' ? result : null
   const playbackEndDay = plannedRoute?.totalFlightDays
     ?? plannedRoute?.trajectory.at(-1)?.elapsedDays
     ?? visibleMissionResult?.summary.totalFlightDays
@@ -944,6 +952,7 @@ export function ThreeDView({
       setSimulationError(null)
       const nextResult = await requestMissionSimulation(draft)
       setResult(nextResult)
+      setMissionResultVisible(true)
       setPlannedMissionDate(nextResult.config.startDate)
       setElapsedDays(0)
       setPlaying(false)
@@ -968,6 +977,10 @@ export function ThreeDView({
   const calculateWaypointRoute = async () => {
     if (!selectedTarget && routeSections.length === 0) {
       setRouteError('Bitte zuerst ein interstellares Ziel wählen.')
+      return
+    }
+    if (routeCalculationBlockReason) {
+      setRouteError(routeCalculationBlockReason)
       return
     }
     abortActivePlayback('route-recalculated')
@@ -1077,6 +1090,7 @@ export function ThreeDView({
       // The visible primary route is the gravity-assist route, so its epoch
       // and mission context must also drive the moving planets and HUD.
       setResult(optimized.mission)
+      setMissionResultVisible(false)
       setPlannedRoute(optimized.route)
       setPlannedMissionDate(optimized.optimizedStartDate)
       setDirectSolarRoute(optimized.alternatives.directSolar.route)
@@ -1124,6 +1138,7 @@ export function ThreeDView({
     setDesiredSolarExitSpeedKmS(100)
     setVisual(DEFAULT_VISUAL_CONFIG)
     setResult(null)
+    setMissionResultVisible(false)
     setPlannedRoute(null)
     setDirectSolarRoute(null)
     setOptimizationResult(null)
@@ -1153,6 +1168,7 @@ export function ThreeDView({
     setOptimizationStartDate(preset.draft.startDate)
     invalidateRoutePlan()
     setResult(null)
+    setMissionResultVisible(false)
     setPlannedRoute(null)
     setPlannedMissionDate(null)
     setDirectSolarRoute(null)
@@ -1365,7 +1381,7 @@ export function ThreeDView({
             <button
               className="quick-route-calculate"
               type="button"
-              disabled={routeLoading || (corridorBlocked && !corridorRequiresDynamicCheck)}
+              disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)}
               onClick={() => void calculateWaypointRoute()}
             >
               {routeLoading ? 'Berechnet …' : 'Bahn berechnen'}
@@ -1424,7 +1440,7 @@ export function ThreeDView({
             >
               {entryCorridorEditorOpen ? 'Korridor · offen' : 'Korridor zeichnen'}
             </button>
-            <button className="quick-route-calculate" type="button" disabled={routeLoading || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={() => void calculateWaypointRoute()}>{routeLoading ? 'Berechnet …' : 'Bahn berechnen'}</button>
+            <button className="quick-route-calculate" type="button" disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={() => void calculateWaypointRoute()}>{routeLoading ? 'Berechnet …' : 'Bahn berechnen'}</button>
           </>}
           {routePlanStatus !== 'review' && <>
             <button className={playing ? 'active' : ''} type="button" disabled={!canPlay || playbackAuditStatus === 'starting'} onClick={() => void toggleMissionPlayback()}>{playing ? 'Pause' : playbackAuditStatus === 'starting' ? 'Log startet …' : 'Mission abspielen'}</button>
@@ -1434,6 +1450,11 @@ export function ThreeDView({
           <button className={navigationMode === 'pan' ? 'active' : ''} type="button" aria-pressed={navigationMode === 'pan'} onClick={() => setNavigationMode('pan')}>Ziehen</button>
           <button className={navigationMode === 'rotate' ? 'active' : ''} type="button" aria-pressed={navigationMode === 'rotate'} onClick={() => setNavigationMode('rotate')}>Drehen</button>
         </div>
+        {routeCalculationBlockReason && routePlanStatus !== 'review' && (
+          <div className="route-calculation-block-banner" role="status">
+            {routeCalculationBlockReason}
+          </div>
+        )}
         <DraggableOverlayPanel
           className="target-controls"
           ariaLabel="Missionsplanung und KI-Navigation"
@@ -1600,6 +1621,7 @@ export function ThreeDView({
                 Drehung {entryCorridor.rotationDeg.toFixed(0)}°
               </span>
               {corridorBlocked && <span className="route-warning">{corridorRequiresDynamicCheck ? 'Schematischer Anflug gesperrt; die räumliche Abschnittskette führt eine dynamische Kollisionsprüfung aus: ' : 'Zielkorridor gesperrt: '}{corridorBlockMessage}</span>}
+              {routeCalculationBlockReason && <span className="route-warning">{routeCalculationBlockReason}</span>}
             </div>
             {selectedSketchCircle && <div className="circle-orientation-controls">
               <strong>Kreisausrichtung im Raum</strong>
@@ -1632,7 +1654,7 @@ export function ThreeDView({
               <button type="button" onClick={resetRouteSketch}>Entwurf zurücksetzen</button>
             </div>
             <span>Der Entwurf verändert die visuelle Führung. Die anschließend berechnete Nominalbahn bleibt physikalisch und wird zwingend durch den festen Ephemeridenanker geführt.</span>
-            <button className="ai-primary-action" type="button" disabled={routeLoading || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={() => { setRouteDrawTool('move'); setRouteSketchSelection(null); void calculateWaypointRoute() }}>{routeLoading ? 'Berechne komplexe Bahn …' : 'Entwurf übernehmen & Bahn physikalisch berechnen'}</button>
+            <button className="ai-primary-action" type="button" disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={() => { setRouteDrawTool('move'); setRouteSketchSelection(null); void calculateWaypointRoute() }}>{routeLoading ? 'Berechne komplexe Bahn …' : 'Entwurf übernehmen & Bahn physikalisch berechnen'}</button>
             <button type="button" onClick={discardRouteSketch}>Entwurf verwerfen</button>
           </div>}
           {routePlanStatus === 'confirmed' && <span className="route-ok">Routenplan bestätigt · Nach der Berechnung bleibt nur die Nominalbahn; Referenz und Streuung sind zuschaltbar.</span>}
@@ -1793,10 +1815,10 @@ export function ThreeDView({
           </details>
           </div>
         </DraggableOverlayPanel>
-        <div className="phase-legend" aria-label="Farblegende">
+        {(plannedRoute || visibleMissionResult) && <div className="phase-legend" aria-label="Farblegende">
           <span className="inbound">Sonnensturz</span><span className="burn">Oberth</span><span className="sail">Electric Sail</span><span className="cruise">Deep Space</span>
-        </div>
-        <div className={`phase-timeline ${plannedRoute ? 'route-timeline' : ''}`} aria-label="Missionstimeline">
+        </div>}
+        {(plannedRoute || visibleMissionResult) && <div className={`phase-timeline ${plannedRoute ? 'route-timeline' : ''}`} aria-label="Missionstimeline">
           {(plannedRoute ? (
             plannedRoute.segments?.map((segment) => [segment.id, segment.label])
             ?? [
@@ -1817,7 +1839,7 @@ export function ThreeDView({
           ]).map(([phase, label]) => (
             <span className={plannedRoute ? currentRouteSegment?.id === phase ? 'active' : '' : currentPoint?.phase.includes(phase) ? 'active' : ''} key={phase}>{label}</span>
           ))}
-        </div>
+        </div>}
         {aimpointEnabled && (
           <div className="aimpoint-overlay" aria-label="Aimpoint-Steuerung">
             <strong>Aimpoint im Planetenbild</strong>

@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 import { ROUTE_INTERSTELLAR_SYSTEMS } from '../interstellarTargets'
 import type { MoonData, PlanetData } from '../types'
-import type { RouteSectionDefinition } from '../routeSections'
+import { routePassage, type RouteSectionDefinition } from '../routeSections'
 import { RouteSectionWizard } from './RouteSectionWizard'
 
 interface RouteSectionListProps {
@@ -13,6 +13,7 @@ interface RouteSectionListProps {
   suggestedOriginId: string
   suggestedTargetId: string
   onCreate: (section: RouteSectionDefinition) => void
+  onUpdate: (section: RouteSectionDefinition) => void
   onEdit: (sectionId: string) => void
   onDelete: (sectionId: string) => void
   onMove: (sectionId: string, direction: -1 | 1) => void
@@ -34,11 +35,13 @@ export function RouteSectionList({
   suggestedOriginId,
   suggestedTargetId,
   onCreate,
+  onUpdate,
   onEdit,
   onDelete,
   onMove,
 }: RouteSectionListProps) {
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [editingSection, setEditingSection] = useState<RouteSectionDefinition | null>(null)
 
   return (
     <section className="route-section-list" aria-labelledby="route-sections-title">
@@ -57,6 +60,7 @@ export function RouteSectionList({
               <th scope="col">Nr.</th>
               <th scope="col">Verbindung</th>
               <th scope="col">Zielkorridor</th>
+              <th scope="col">Passage</th>
               <th scope="col">Δv-Fächer</th>
               <th scope="col"><span className="visually-hidden">Aktionen</span></th>
             </tr>
@@ -64,6 +68,7 @@ export function RouteSectionList({
           <tbody>
             {sections.map((section, index) => {
               const isActive = section.id === activeSectionId
+              const passage = routePassage(section)
               return (
                 <tr key={section.id} className={isActive ? 'active' : ''}>
                   <td>
@@ -102,6 +107,23 @@ export function RouteSectionList({
                       ? `±${section.corridor.horizontalHalfAngleDeg.toFixed(0)}° / ±${section.corridor.verticalHalfAngleDeg.toFixed(0)}°`
                       : 'Deaktiviert'}
                   </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="route-passage-edit"
+                      title="Passage bearbeiten"
+                      onClick={() => {
+                        onEdit(section.id)
+                        setEditingSection(section)
+                      }}
+                    >
+                      {passage.mode === 'full-orbit'
+                        ? `Voll · 360° ${passage.orbitDirection === 'prograde' ? 'prograd' : 'retrograd'}`
+                        : passage.mode === 'partial-orbit'
+                          ? `Teil · ${passage.orbitAngleDeg.toFixed(0)}° ${passage.orbitDirection === 'prograde' ? 'prograd' : 'retrograd'}`
+                          : 'Direkt'}
+                    </button>
+                  </td>
                   <td>−{section.deltaVMinusKmS.toFixed(1)} / +{section.deltaVPlusKmS.toFixed(1)} km/s</td>
                   <td>
                     <div className="route-section-actions">
@@ -116,7 +138,7 @@ export function RouteSectionList({
             })}
             {sections.length === 0 && (
               <tr className="route-section-empty-row">
-                <td colSpan={5}>Keine Musterroute und keine implizite Abhängigkeit. Das Projekt ist leer.</td>
+                <td colSpan={6}>Keine Musterroute und keine implizite Abhängigkeit. Das Projekt ist leer.</td>
               </tr>
             )}
           </tbody>
@@ -129,9 +151,25 @@ export function RouteSectionList({
           suggestedOriginId={suggestedOriginId}
           suggestedTargetId={suggestedTargetId}
           onCancel={() => setWizardOpen(false)}
-          onCreate={(section) => {
+          onSubmit={(section) => {
             onCreate(section)
             setWizardOpen(false)
+          }}
+        />
+      )}
+      {editingSection && (
+        <RouteSectionWizard
+          planets={planets}
+          moons={moons}
+          suggestedOriginId={editingSection.originId}
+          suggestedTargetId={editingSection.targetId}
+          initialSection={editingSection}
+          initialStep={3}
+          mode="edit"
+          onCancel={() => setEditingSection(null)}
+          onSubmit={(section) => {
+            onUpdate(section)
+            setEditingSection(null)
           }}
         />
       )}

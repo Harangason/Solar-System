@@ -38,7 +38,7 @@ from trajectory import (
     simulate_mission,
 )
 from view_3d_celestials import PLANET_DATA
-from generic_route_planner import simulate_generic_route_sections
+from generic_route_planner import parse_route_passage, simulate_generic_route_sections
 
 
 SUN_MASS_KG = MU_SUN / G_KM3_KG_S2
@@ -597,11 +597,16 @@ def simulate_route_sections(values: dict | None) -> dict:
         and str((raw or {}).get("targetId") or "") not in INTERSTELLAR_ROUTE_TARGETS
         for raw in raw_sections
     )
+    has_non_direct_passage = any(
+        parse_route_passage((raw or {}).get("passage")).get("mode") != "direct"
+        for raw in raw_sections
+        if isinstance(raw, dict)
+    )
     # Keep the specialised high-accuracy solar-Oberth chain only for the
     # mission it actually models.  Every freely selected origin, and every
     # Sun/moon endpoint, must use the selected bodies instead of an implicit
     # Earth departure.
-    if first_origin != "sun" or has_non_planet_target:
+    if first_origin != "sun" or has_non_planet_target or has_non_direct_passage:
         return simulate_generic_route_sections(values)
 
     sections: list[dict] = []
@@ -629,6 +634,7 @@ def simulate_route_sections(values: dict | None) -> dict:
             "originId": origin_id,
             "targetId": target_id,
             "corridor": corridor,
+            "passage": parse_route_passage(raw.get("passage")),
             "deltaVMinusKmS": max(0.0, float(raw.get("deltaVMinusKmS", 0.0))),
             "deltaVPlusKmS": max(0.0, float(raw.get("deltaVPlusKmS", 0.0))),
         })
@@ -720,6 +726,7 @@ def simulate_route_sections(values: dict | None) -> dict:
                 "desiredDepartureDirection": list(desired_direction),
                 "predictedOutgoingDirection": list(_normalize(start_velocity)),
                 "predictedPassiveTurnDeg": 0.0,
+                "passage": section["passage"],
                 "corridor": {
                     "enabled": section["corridor"]["enabled"],
                     "centerDirection": list(desired_direction),
@@ -849,6 +856,7 @@ def simulate_route_sections(values: dict | None) -> dict:
                 local["predictedOutgoingDirection"]
             ),
             "predictedPassiveTurnDeg": local["predictedPassiveTurnDeg"],
+            "passage": section["passage"],
             "corridor": {
                 "enabled": section["corridor"]["enabled"],
                 "centerDirection": list(section["corridor"]["centerDirection"]),

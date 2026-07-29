@@ -17,6 +17,7 @@ import {
   type CorridorTargetPhysics,
 } from '../corridorFeasibility'
 import { ROUTE_INTERSTELLAR_SYSTEMS } from '../interstellarTargets'
+import type { RoutePassageDirection } from '../routeSections'
 import type { MoonData, PlanetData, SunData } from '../types'
 
 interface PlanetCorridorPlannerProps {
@@ -34,6 +35,8 @@ interface PlanetCorridorPlannerProps {
   onDeltaVMinusChange: (value: number) => void
   onDeltaVPlusChange: (value: number) => void
   sectionNumber: number
+  onPreviewRoute: () => void
+  passageDirection?: RoutePassageDirection
 }
 
 type CorridorProjection = CorridorMainProjection
@@ -56,6 +59,13 @@ function arcPath(radius: number, startAngle: number, endAngle: number) {
   const start = polarPoint(radius, startAngle)
   const end = polarPoint(radius, endAngle)
   return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${endAngle - startAngle > 180 ? 1 : 0} 1 ${end.x} ${end.y}`
+}
+
+function directedArcPath(radius: number, startAngle: number, endAngle: number, sweep: 0 | 1) {
+  const start = polarPoint(radius, startAngle)
+  const end = polarPoint(radius, endAngle)
+  const largeArc = Math.abs(endAngle - startAngle) > 180 ? 1 : 0
+  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} ${sweep} ${end.x} ${end.y}`
 }
 
 function corridorBandPath(innerRadius: number, outerRadius: number, startAngle: number, endAngle: number) {
@@ -99,6 +109,8 @@ export function PlanetCorridorPlanner({
   onDeltaVMinusChange,
   onDeltaVPlusChange,
   sectionNumber,
+  onPreviewRoute,
+  passageDirection = 'prograde',
 }: PlanetCorridorPlannerProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const dragging = useRef(false)
@@ -165,6 +177,12 @@ export function PlanetCorridorPlanner({
     x: corridorCenter.x - radialY * (isMainProjection ? 110 : 72),
     y: corridorCenter.y + radialX * (isMainProjection ? 110 : 72) + 6,
   }
+  const directionArrowRadius = Math.max(PLANET_RADIUS + 36, displayCorridorRadius - 18)
+  const directionArrowStartAngle = centerAngle - 20
+  const directionArrowEndAngle = centerAngle + 20
+  const directionArrowSweep: 0 | 1 = passageDirection === 'retrograde' ? 0 : 1
+  const directionArrowLabel = polarPoint(directionArrowRadius + 20, centerAngle)
+  const directionArrowMarkerId = `corridor-direction-arrow-${sectionNumber}-${projection}`
   const approachStart = { x: 105, y: CENTER_Y }
   const approachLineStart = { x: approachStart.x + 18, y: approachStart.y }
   const minusTarget = polarPoint(displayCorridorRadius, startAngle)
@@ -252,6 +270,9 @@ export function PlanetCorridorPlanner({
           <small>Aktiver Abschnitt {String(sectionNumber).padStart(2, '0')}</small>
           <strong>{originName} → {selectedTarget?.name ?? 'Ziel'}</strong>
         </div>
+        <button type="button" className="route-preview-open" onClick={onPreviewRoute}>
+          Route ansehen
+        </button>
         <label>
           <span>Ursprung</span>
           <select value={originId} onChange={(event) => onOriginChange(event.target.value)}>
@@ -426,6 +447,9 @@ export function PlanetCorridorPlanner({
           <marker id="coordinate-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
             <path d="M 0 0 L 8 4 L 0 8 Z" className="coordinate-arrow-head" />
           </marker>
+          <marker id={directionArrowMarkerId} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+            <path d="M 0 0 L 8 4 L 0 8 Z" className="target-rotation-arrow-head" />
+          </marker>
         </defs>
 
         <rect width={CANVAS_WIDTH} height={CANVAS_HEIGHT} className="corridor-space" />
@@ -486,6 +510,19 @@ export function PlanetCorridorPlanner({
 
         <path d={arcPath(innerRadius, startAngle - 8, endAngle + 8)} className="corridor-guide-arc minimum" />
         <path d={arcPath(outerRadius, startAngle - 8, endAngle + 8)} className="corridor-guide-arc maximum" />
+        <path
+          d={directedArcPath(directionArrowRadius, directionArrowStartAngle, directionArrowEndAngle, directionArrowSweep)}
+          className="target-rotation-arrow"
+          markerEnd={`url(#${directionArrowMarkerId})`}
+        />
+        <text
+          x={directionArrowLabel.x}
+          y={directionArrowLabel.y + 4}
+          textAnchor="middle"
+          className="target-rotation-label"
+        >
+          {passageDirection === 'retrograde' ? 'retrograd' : 'prograd'}
+        </text>
         <path
           d={corridorBandPath(innerRadius, outerRadius, startAngle, endAngle)}
           className={`${definition.enabled ? 'target-corridor-band' : 'target-corridor-band disabled'}${feasibility.blocked ? ' blocked' : ''}${isMainProjection ? '' : ' projected'}${projectionTouchesObject ? ' on-object' : ''}`}
