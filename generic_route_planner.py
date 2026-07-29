@@ -355,10 +355,91 @@ def _passage_basis(entry_direction: tuple, incoming_relative_velocity: tuple) ->
     return tangent, normal
 
 
+def _targeted_passage_angle_deg(
+    *,
+    passage: dict,
+    target: RouteBody,
+    lookahead_target: RouteBody | None,
+    catalog: dict[str, RouteBody],
+    epoch_days: float,
+    entry_day: float,
+    entry_radius: float,
+    passage_speed: float,
+    entry_direction: tuple,
+    normal: tuple,
+    direction_sign: float,
+) -> tuple[float, dict | None]:
+    if lookahead_target is None or passage["mode"] == "direct":
+        return passage["orbitAngleDeg"], None
+
+    requested_angle = float(passage["orbitAngleDeg"])
+    requested_duration_days = (
+        abs(requested_angle) * pi / 180 * entry_radius / passage_speed / DAY_SECONDS
+        if passage_speed > 0
+        else 0.0
+    )
+    target_position, _ = _body_state(
+        target,
+        epoch_days + entry_day + requested_duration_days,
+        catalog,
+    )
+    lookahead_position, _ = _body_state(
+        lookahead_target,
+        epoch_days + entry_day + requested_duration_days,
+        catalog,
+    )
+    transfer_seconds = _transfer_seconds(
+        target_position,
+        lookahead_position,
+        MU_SUN,
+        local=False,
+    )
+    future_day = entry_day + requested_duration_days + transfer_seconds / DAY_SECONDS
+    target_position, _ = _body_state(target, epoch_days + future_day, catalog)
+    lookahead_position, _ = _body_state(
+        lookahead_target,
+        epoch_days + future_day,
+        catalog,
+    )
+    desired_direction = _normalize(_subtract(lookahead_position, target_position))
+    projected = _subtract(
+        desired_direction,
+        tuple(_dot(desired_direction, normal) * component for component in normal),
+    )
+    if _magnitude(projected) < 1e-9:
+        return requested_angle, {
+            "method": "lookahead projection degenerate",
+            "lookaheadTargetId": lookahead_target.id,
+            "requestedAngleDeg": requested_angle,
+            "selectedAngleDeg": requested_angle,
+        }
+    projected = _normalize(projected)
+    cross = _cross(entry_direction, projected)
+    signed_angle = atan2(_dot(normal, cross), _dot(entry_direction, projected)) * 180 / pi
+    directed_angle = signed_angle if direction_sign > 0 else -signed_angle
+    directed_angle = directed_angle % 360.0
+    if directed_angle < 1e-6:
+        directed_angle = 360.0 if passage["mode"] == "full-orbit" else 0.0
+    selected_angle = (
+        360.0 + directed_angle
+        if passage["mode"] == "full-orbit" and directed_angle < 359.999
+        else directed_angle
+    )
+    return selected_angle, {
+        "method": "projected future target direction",
+        "lookaheadTargetId": lookahead_target.id,
+        "requestedAngleDeg": requested_angle,
+        "selectedAngleDeg": selected_angle,
+        "transferPreviewDays": transfer_seconds / DAY_SECONDS,
+        "desiredExitDirection": list(projected),
+    }
+
+
 def _local_passage(
     *,
     section: dict,
     target: RouteBody,
+    lookahead_target: RouteBody | None,
     catalog: dict[str, RouteBody],
     epoch_days: float,
     entry_day: float,
@@ -380,6 +461,7 @@ def _local_passage(
             "passageDeltaVKmS": 0.0,
             "minimumRadiusKm": entry_radius,
             "periapsisOffsetIndex": 0,
+            "exitAngleSelection": None,
         }
 
     target_position, target_velocity = _body_state(target, epoch_days + entry_day, catalog)
@@ -387,10 +469,23 @@ def _local_passage(
     incoming_speed = max(_magnitude(incoming_relative_velocity), 1e-6)
     _, normal = _passage_basis(entry_direction, incoming_relative_velocity)
     direction_sign = 1.0 if passage["orbitDirection"] == "prograde" else -1.0
-    orbit_angle_rad = direction_sign * passage["orbitAngleDeg"] * pi / 180
     target_mu = target.mass_kg * G_KM3_KG_S2
     circular_speed = sqrt(target_mu / entry_radius) if target_mu > 0 else incoming_speed
     passage_speed = max(0.01, min(max(incoming_speed, circular_speed), incoming_speed + section["deltaVPlusKmS"]))
+    selected_angle_deg, exit_angle_selection = _targeted_passage_angle_deg(
+        passage=passage,
+        target=target,
+        lookahead_target=lookahead_target,
+        catalog=catalog,
+        epoch_days=epoch_days,
+        entry_day=entry_day,
+        entry_radius=entry_radius,
+        passage_speed=passage_speed,
+        entry_direction=entry_direction,
+        normal=normal,
+        direction_sign=direction_sign,
+    )
+    orbit_angle_rad = direction_sign * selected_angle_deg * pi / 180
     entry_tangent = _normalize(_cross(normal, entry_direction))
     if direction_sign < 0:
         entry_tangent = tuple(-component for component in entry_tangent)
@@ -399,7 +494,7 @@ def _local_passage(
 
     arc_length = abs(orbit_angle_rad) * entry_radius
     duration_seconds = arc_length / passage_speed if passage_speed > 0 else 0.0
-    sample_count = max(16, min(360, int(abs(passage["orbitAngleDeg"]) // 2) + 32))
+    sample_count = max(16, min(540, int(abs(selected_angle_deg) // 2) + 32))
     points = []
     minimum_radius = float("inf")
     periapsis_index = 0
@@ -441,7 +536,8 @@ def _local_passage(
         "exitPosition": tuple(points[-1]["positionKm"]),
         "exitVelocity": exit_velocity,
         "exitDirection": exit_direction,
-        "exitAngleDeg": passage["orbitAngleDeg"] * direction_sign,
+        "exitAngleDeg": selected_angle_deg * direction_sign,
+        "exitAngleSelection": exit_angle_selection,
         "passageDurationDays": duration_seconds / DAY_SECONDS,
         "passageDeltaVKmS": entry_delta_v,
         "minimumRadiusKm": minimum_radius,
@@ -616,6 +712,9 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
         passage_result = _local_passage(
             section=section,
             target=target,
+            lookahead_target=(
+                parsed[index + 1]["target"] if index + 1 < len(parsed) else None
+            ),
             catalog=catalog,
             epoch_days=epoch_days,
             entry_day=arrival_day,
@@ -679,6 +778,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
                 "entryInsideCorridor": True,
                 "exitDirection": list(passage_result["exitDirection"]),
                 "passageSignedAngleDeg": passage_result["exitAngleDeg"],
+                "exitAngleSelection": passage_result["exitAngleSelection"],
             },
             "relativeTrajectory": [
                 {
@@ -720,10 +820,10 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
     warnings = [
         (
             f"Abschnitt {index + 1} benötigt am Übergang Δv "
-            f"{section['requiredTransitionDeltaVKmS']:.2f} km/s."
+            f"{section['requiredSectionDeltaVKmS']:.2f} km/s."
         )
         for index, section in enumerate(calculated)
-        if section["requiredTransitionDeltaVKmS"]
+        if section["requiredSectionDeltaVKmS"]
         > parsed[index]["deltaVPlusKmS"] + 1e-9
     ]
     final_velocity = tuple(trajectory[-1].get("velocityKmS", start_velocity))
@@ -736,7 +836,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             f"(Minimum {minimum_solar_radius_km:.0f} km)."
         )
     feasible_with_configured_burn = all(
-        section["requiredTransitionDeltaVKmS"]
+        section["requiredSectionDeltaVKmS"]
         <= parsed[index]["deltaVPlusKmS"] + 1e-9
         for index, section in enumerate(calculated)
     )

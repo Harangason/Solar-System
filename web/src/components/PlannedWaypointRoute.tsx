@@ -187,6 +187,15 @@ export interface WaypointRouteResult {
     corridor: {
       enabled: boolean
       entryInsideCorridor: boolean
+      passageSignedAngleDeg?: number
+      exitAngleSelection?: {
+        method: string
+        lookaheadTargetId: string
+        requestedAngleDeg: number
+        selectedAngleDeg: number
+        transferPreviewDays?: number
+        desiredExitDirection?: [number, number, number]
+      } | null
     }
   }>
   highFidelityNBody?: {

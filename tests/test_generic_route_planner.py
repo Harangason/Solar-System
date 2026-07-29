@@ -162,6 +162,34 @@ class GenericRoutePlannerTests(unittest.TestCase):
         self.assertFalse(result["summary"]["targetInjectionApplied"])
         self.assertFalse(result["summary"]["passiveTargeting"])
 
+    def test_full_jupiter_orbit_exit_angle_targets_earth_return(self):
+        jupiter = section("sun", "jupiter", "jupiter-orbit")
+        jupiter["passage"] = {
+            "mode": "full-orbit",
+            "orbitAngleDeg": 360,
+            "orbitDirection": "prograde",
+            "entryBehavior": "ballistic",
+            "exitBehavior": "ballistic",
+        }
+
+        result = self.calculate([
+            section("earth", "sun", "earth-sun"),
+            jupiter,
+            section("jupiter", "earth", "jupiter-earth"),
+        ])
+
+        jupiter_section = result["routeSections"][1]
+        earth_return = result["routeSections"][2]
+        selection = jupiter_section["corridor"]["exitAngleSelection"]
+        self.assertEqual(selection["lookaheadTargetId"], "earth")
+        self.assertGreater(selection["selectedAngleDeg"], 360.0)
+        self.assertAlmostEqual(
+            jupiter_section["corridor"]["passageSignedAngleDeg"],
+            selection["selectedAngleDeg"],
+        )
+        self.assertEqual(earth_return["targetId"], "earth")
+        self.assertLess(earth_return["lambertEndpointResidualKm"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
