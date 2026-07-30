@@ -2,8 +2,10 @@ import type { MoonData, PlanetData } from '../types'
 
 interface TwoDPlanetDetailsProps {
   planet: PlanetData
+  planets: PlanetData[]
   moons: MoonData[]
   epochLabel: string
+  onPlanetChange: (planetId: string) => void
 }
 
 function formatNumber(value: number, maximumFractionDigits = 2) {
@@ -12,16 +14,30 @@ function formatNumber(value: number, maximumFractionDigits = 2) {
 
 export function TwoDPlanetDetails({
   planet,
+  planets,
   moons,
   epochLabel,
+  onPlanetChange,
 }: TwoDPlanetDetailsProps) {
   return (
     <aside className="two-d-planet-details" aria-labelledby="two-d-planet-title">
       <header>
         <span className="planet-detail-color" style={{ backgroundColor: planet.color }} aria-hidden="true" />
-        <div>
+        <div className="planet-detail-heading">
           <small>Ausgewähltes Objekt · {epochLabel}</small>
           <h2 id="two-d-planet-title">{planet.name}</h2>
+          <label className="planet-detail-selector">
+            <span className="visually-hidden">Planet auswählen</span>
+            <select
+              aria-label="Planet auswählen"
+              value={planet.id}
+              onChange={(event) => onPlanetChange(event.target.value)}
+            >
+              {planets.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+          </label>
         </div>
       </header>
 

@@ -125,6 +125,16 @@ export function App() {
     setPlannedMissionDate(null)
   }, [])
 
+  const applyPlannedSolution = useCallback((
+    date: string,
+    sections: RouteSectionDefinition[],
+    route: WaypointRouteResult,
+  ) => {
+    setRouteSections(sections)
+    setPlannedMissionDate(date)
+    setPlannedRoute(route)
+  }, [])
+
   const setWaypointId: Dispatch<SetStateAction<string>> = useCallback((action) => {
     setRouteSections((current) => current.map((section) => {
       if (section.id !== activeRouteSectionId) return section
@@ -371,9 +381,8 @@ export function App() {
                 activeRouteSectionId={activeRouteSectionId}
                 onActiveRouteSectionChange={setActiveRouteSectionId}
                 plannedMissionDate={plannedMissionDate}
-                onPlannedMissionDateChange={setPlannedMissionDate}
                 plannedRoute={plannedRoute}
-                onPlannedRouteChange={setPlannedRoute}
+                onApplyPlannedSolution={applyPlannedSolution}
                 missionConfig={missionConfig}
               />
             )

@@ -74,6 +74,61 @@ class MultiRoutePlannerTests(unittest.TestCase):
             "solar-planet-chain-with-terminal-asymptote",
         )
 
+    def test_interstellar_summary_reports_calculated_alignment(self):
+        corridor = {
+            "enabled": False,
+            "centerDirection": [1.0, 0.0, 0.0],
+            "horizontalHalfAngleDeg": 8.0,
+            "verticalHalfAngleDeg": 5.0,
+        }
+        result = simulate_route_sections({
+            "mission": {"startDate": "2034-01-04", "nBodyEnabled": False},
+            "routeSections": [
+                {
+                    "id": "sun-jupiter",
+                    "originId": "sun",
+                    "targetId": "jupiter",
+                    "corridor": corridor,
+                    "passage": {"mode": "partial-orbit", "orbitAngleDeg": 200},
+                    "deltaVMinusKmS": 0.5,
+                    "deltaVPlusKmS": 0.5,
+                },
+                {
+                    "id": "jupiter-proxima",
+                    "originId": "jupiter",
+                    "targetId": "proxima-centauri",
+                    "corridor": corridor,
+                    "passage": {"mode": "direct"},
+                    "deltaVMinusKmS": 0.5,
+                    "deltaVPlusKmS": 0.5,
+                },
+            ],
+        })
+
+        calculated_alignment = result["routeSections"][-1]["lookaheadAlignmentDeg"]
+        self.assertEqual(result["summary"]["targetAlignmentDeg"], calculated_alignment)
+        self.assertEqual(
+            result["summary"]["actualTargetAlignmentDeg"],
+            calculated_alignment,
+        )
+        solar_departure = result["routeSections"][0]
+        self.assertFalse(solar_departure["backtracksFromOuterTarget"])
+        self.assertGreaterEqual(solar_departure["departureRadialSpeedKmS"], -0.02)
+        self.assertLess(solar_departure["requiredTransitionDeltaVKmS"], 100.0)
+        self.assertLessEqual(
+            solar_departure["corridorInsertionDeltaVKmS"],
+            0.5 + 1e-9,
+        )
+        self.assertTrue(result["solarPassage"]["outboundAfterPeriapsis"])
+        self.assertLess(
+            result["solarPassage"]["entryIndex"],
+            result["solarPassage"]["periapsisIndex"],
+        )
+        self.assertLess(
+            result["solarPassage"]["periapsisIndex"],
+            result["solarPassage"]["exitIndex"],
+        )
+
     def test_non_interstellar_explicit_passage_still_uses_generic_solver(self):
         classification = classify_route_sections([
             {
@@ -84,6 +139,18 @@ class MultiRoutePlannerTests(unittest.TestCase):
         ])
 
         self.assertEqual(classification["solver"], "generic")
+
+    def test_sun_target_is_known_to_generic_solver(self):
+        classification = classify_route_sections([
+            {
+                "originId": "earth",
+                "targetId": "sun",
+            },
+        ])
+
+        self.assertEqual(classification["solver"], "generic")
+        self.assertEqual(classification["reason"], "freely-selected-origin")
+        self.assertNotIn("unknownTargets", classification)
 
     def test_malformed_route_section_is_classified_without_crashing(self):
         classification = classify_route_sections([None])

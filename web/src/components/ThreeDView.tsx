@@ -1474,7 +1474,7 @@ export function ThreeDView({
         )}
         <DraggableOverlayPanel
           className="target-controls"
-          ariaLabel="Missionsplanung und KI-Navigation"
+          ariaLabel="Missionsplanung und Solver-Navigation"
           draggable={false}
           header={<div className="target-panel-title"><strong>Missionsplanung</strong><small>{routeSections.length === 0 ? 'Blanko-Projekt · keine Route' : `${selectedTarget?.name ?? 'Kein interstellares Ziel'} → ${data.planets.find((planet) => planet.id === waypointId)?.name ?? waypointId}`}</small></div>}
         >
@@ -1680,17 +1680,17 @@ export function ThreeDView({
             </div>
           </details>
           <details className="target-control-section">
-            <summary><span>KI-Randwertsuche</span><small>{optimizationLoading ? 'prüft …' : optimizationPreflight && !optimizationPreflight.energeticallyReachable ? 'Ziel außerhalb Budget' : optimizationResult ? (optimizationResult.plausible ? 'flugfähig' : 'keine Freigabe') : 'optional'}</small></summary>
+            <summary><span>Solver-Suche</span><small>{optimizationLoading ? 'prüft …' : optimizationPreflight && !optimizationPreflight.energeticallyReachable ? 'Ziel außerhalb Budget' : optimizationResult ? (optimizationResult.plausible ? 'flugfähig' : 'keine Freigabe') : 'optional'}</small></summary>
             <div className="target-control-section-content">
           <div className="ai-integrated-block">
-          <div className="optimizer-divider"><strong>KI-gestützte Randwertsuche</strong><span>vorwärts + rückwärts · Mehrpass 12/8</span></div>
-          <span>Die KI koppelt Sonnenaustritt, Ankunft und B-Plane direkt an das gewählte Ziel und den Vorbeiflug.</span>
+          <div className="optimizer-divider"><strong>Numerische Randwertsuche</strong><span>vorwärts + rückwärts · Mehrpass 12/8</span></div>
+          <span>Der Optimierer koppelt Sonnenaustritt, Ankunft und B-Plane direkt an das gewählte Ziel und den Vorbeiflug.</span>
           <label><span>Zielgeschwindigkeit Sonnenaustritt (km/s bei 1 AE)</span><input type="number" min="1" max="1000" step="1" value={desiredSolarExitSpeedKmS} onChange={(event) => { setDesiredSolarExitSpeedKmS(event.target.valueAsNumber); invalidateRoutePlan(); setPlannedRoute(null); setOptimizationResult(null) }} /></label>
           <label><span>Ausgangs-Start / Suchzentrum</span><input type="date" value={optimizationStartDate} onChange={(event) => { setOptimizationStartDate(event.target.value); invalidateRoutePlan() }} /></label>
           <label><span>Suchhorizont je Richtung (Tage)</span><input type="number" min="500" max="7305" step="1" value={optimizationWindowDays} onChange={(event) => { setOptimizationWindowDays(event.target.valueAsNumber); invalidateRoutePlan() }} /></label>
           <span>Startdatum, Begegnungstag und Horizont: bidirektional mit 100 → 10 → 5 → 1 Tagen · Grenzen 500 Tage bis 20 Jahre.</span>
           <label><span>Mindestkonfidenz</span><input type="number" min="90" max="99.9" step="0.5" value={optimizationThreshold} onChange={(event) => setOptimizationThreshold(event.target.valueAsNumber)} /></label>
-          <button className="ai-primary-action" type="button" disabled={optimizationLoading || routeLoading || routePlanStatus !== 'confirmed' || corridorBlocked} onClick={() => void optimizeLaunchWindow()}>{optimizationLoading ? 'KI koppelt Sonne, Jupiter und Ziel …' : routePlanStatus === 'confirmed' ? 'Route mit KI bidirektional optimieren' : 'Zuerst Routenplan bestätigen'}</button>
+          <button className="ai-primary-action" type="button" disabled={optimizationLoading || routeLoading || routePlanStatus !== 'confirmed' || corridorBlocked} onClick={() => void optimizeLaunchWindow()}>{optimizationLoading ? 'Optimierer koppelt Sonne, Jupiter und Ziel …' : routePlanStatus === 'confirmed' ? 'Route bidirektional optimieren' : 'Zuerst Routenplan bestätigen'}</button>
           <label className="optimizer-check"><span>Zyklisch neu rechnen</span><input type="checkbox" checked={autoReoptimize} onChange={(event) => setAutoReoptimize(event.target.checked)} /></label>
           {autoReoptimize && <label><span>Intervall (min)</span><input type="number" min="1" step="1" value={recalculationMinutes} onChange={(event) => setRecalculationMinutes(event.target.valueAsNumber)} /></label>}
           {optimizationPreflight && !optimizationPreflight.energeticallyReachable && !optimizationResult && (

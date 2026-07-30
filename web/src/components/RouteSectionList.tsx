@@ -15,6 +15,7 @@ interface RouteSectionListProps {
   onCreate: (section: RouteSectionDefinition) => void
   onUpdate: (section: RouteSectionDefinition) => void
   onEdit: (sectionId: string) => void
+  onPreview: (sectionId: string) => void
   onDelete: (sectionId: string) => void
   onMove: (sectionId: string, direction: -1 | 1) => void
 }
@@ -37,6 +38,7 @@ export function RouteSectionList({
   onCreate,
   onUpdate,
   onEdit,
+  onPreview,
   onDelete,
   onMove,
 }: RouteSectionListProps) {
@@ -130,6 +132,7 @@ export function RouteSectionList({
                       <button type="button" className={isActive ? 'selected' : ''} onClick={() => onEdit(section.id)}>
                         {isActive ? 'Aktiv' : 'Bearbeiten'}
                       </button>
+                      <button type="button" onClick={() => onPreview(section.id)}>Route ansehen</button>
                       <button type="button" className="danger" onClick={() => onDelete(section.id)}>Löschen</button>
                     </div>
                   </td>

@@ -34,6 +34,20 @@ export interface WaypointRouteResult {
   startDate: string
   totalFlightDays: number
   warnings?: string[]
+  solarPassage?: {
+    entryIndex: number
+    periapsisIndex: number
+    exitIndex: number
+    corridorRadiusKm: number
+    periapsisRadiusKm: number
+    entryPositionKm: [number, number, number]
+    exitPositionKm: [number, number, number]
+    entryDirection: [number, number, number]
+    exitDirection: [number, number, number]
+    passageAngleDeg: number
+    orbitDirection: 'prograde' | 'retrograde'
+    outboundAfterPeriapsis: boolean
+  }
   solarBoundary?: {
     definition: string
     radiusAu: number
@@ -179,23 +193,43 @@ export interface WaypointRouteResult {
     entryLatitudeDeg: number
     minimumAltitudeKm: number
     requiredTransitionDeltaVKmS: number
+    availableTransitionDeltaVKmS?: number
+    transitionDeltaVDeficitKmS?: number
+    departureRadialSpeedKmS?: number
+    departureDirectionChangeDeg?: number
+    backtracksFromOuterTarget?: boolean
+    transferDurationDays?: number
     corridorInsertionDeltaVKmS: number
     entryVelocityPreserved?: boolean
     lookaheadTargetId?: string | null
     lookaheadAlignmentDeg?: number
     selectedBPlaneClockDeg?: number
     predictedPassiveTurnDeg?: number
+    desiredDepartureDirection?: [number, number, number] | null
+    predictedOutgoingDirection?: [number, number, number]
+    requestedPassageAngleDeg?: number
+    selectedPassageAngleDeg?: number
     corridor: {
       enabled: boolean
       entryInsideCorridor: boolean
+      centerDirection?: [number, number, number]
       passageSignedAngleDeg?: number
       exitAngleSelection?: {
         method: string
         lookaheadTargetId: string
         requestedAngleDeg: number
         selectedAngleDeg: number
+        autoExtendedAngleDeg?: number
         transferPreviewDays?: number
         desiredExitDirection?: [number, number, number]
+        desiredExitRadialDirection?: [number, number, number]
+        lineOfSightClear?: boolean
+        bestApproximation?: boolean
+        requiresCurvedTransfer?: boolean
+        futureTargetDistanceKm?: number
+        keepOutRadiusKm?: number
+        departureClearanceKm?: number
+        straightLineClearanceDeficitKm?: number
       } | null
     }
   }>

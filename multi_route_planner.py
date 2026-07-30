@@ -191,6 +191,7 @@ def _find_transfer(
     fixed_arrival_day: float | None,
     minimum_periapsis_radius_km: float,
     lookahead_target_id: str | None = None,
+    maximum_transition_delta_v_km_s: float | None = None,
 ) -> dict:
     sphere_of_influence_km = _sphere_of_influence_km(target_ephemeris, target_data)
     planet_mu = G_KM3_KG_S2 * target_data[2]
@@ -292,6 +293,21 @@ def _find_transfer(
                     for key, value in branch.items()
                     if key not in {"departure", "arrival"}
                 }
+                injection_delta_v_km_s = _magnitude(
+                    _subtract(departure_velocity, start_velocity)
+                )
+                departure_radial_speed_km_s = _dot(
+                    departure_velocity,
+                    _normalize(start_position),
+                )
+                departure_direction_change_deg = _angle_deg(
+                    departure_velocity,
+                    start_velocity,
+                )
+                target_is_outside_start = (
+                    target_ephemeris[2] * AU_KM
+                    > _magnitude(start_position) * 1.05
+                )
                 candidates.append({
                     "arrivalDay": arrival_day,
                     "durationSeconds": duration_seconds,
@@ -304,8 +320,17 @@ def _find_transfer(
                     "inwardSpeedKmS": inward_speed,
                     "horizontalOffsetDeg": horizontal_offset,
                     "verticalOffsetDeg": vertical_offset,
-                    "injectionDeltaVKmS": _magnitude(
-                        _subtract(departure_velocity, start_velocity)
+                    "injectionDeltaVKmS": injection_delta_v_km_s,
+                    "transitionDeltaVDeficitKmS": max(
+                        0.0,
+                        injection_delta_v_km_s
+                        - (maximum_transition_delta_v_km_s or 0.0),
+                    ),
+                    "departureRadialSpeedKmS": departure_radial_speed_km_s,
+                    "departureDirectionChangeDeg": departure_direction_change_deg,
+                    "backtracksFromOuterTarget": (
+                        target_is_outside_start
+                        and departure_radial_speed_km_s < -0.02
                     ),
                     "lambertDiagnostics": diagnostics,
                     "sphereOfInfluenceKm": sphere_of_influence_km,
@@ -321,26 +346,51 @@ def _find_transfer(
             f"Kein nach innen gerichteter Eintritt in den Zielkorridor von "
             f"{target_data[1]} ist für diesen Abschnitt erreichbar."
         )
-    # A route that merely clips the SOI is not a valid flyby design.  Match
-    # the requested safe periapsis first; only then minimise the transition
-    # impulse among geometrically equivalent solutions.
-    if lookahead_target_id:
+    # Start at solar periapsis with a continuous, outward-moving state.  A
+    # visually well-aligned Lambert branch is not useful if it first reverses
+    # the trajectory or needs hundreds of km/s of unconfigured impulse.
+    outbound_candidates = [
+        item for item in candidates
+        if not item["backtracksFromOuterTarget"]
+    ]
+    if outbound_candidates:
+        candidates = outbound_candidates
+
+    affordable_candidates = (
+        [
+            item for item in candidates
+            if item["injectionDeltaVKmS"]
+            <= maximum_transition_delta_v_km_s + 1e-9
+        ]
+        if maximum_transition_delta_v_km_s is not None
+        else []
+    )
+    if affordable_candidates:
+        candidates = affordable_candidates
         return min(
             candidates,
             key=lambda item: (
-                item["lookaheadAlignmentDeg"]
-                + 240 * abs(log(
+                item["lookaheadAlignmentDeg"],
+                item["departureDirectionChangeDeg"],
+                item["injectionDeltaVKmS"],
+                abs(log(
                     item["predictedPeriapsisRadiusKm"]
                     / minimum_periapsis_radius_km
                 )),
-                item["injectionDeltaVKmS"],
             ),
         )
+
     return min(
         candidates,
         key=lambda item: (
-            abs(log(item["predictedPeriapsisRadiusKm"] / minimum_periapsis_radius_km)),
+            item["transitionDeltaVDeficitKmS"],
             item["injectionDeltaVKmS"],
+            item["departureDirectionChangeDeg"],
+            item["lookaheadAlignmentDeg"],
+            abs(log(
+                item["predictedPeriapsisRadiusKm"]
+                / minimum_periapsis_radius_km
+            )),
         ),
     )
 
@@ -352,6 +402,7 @@ def _propagate_inside_sphere(
     target_ephemeris: tuple,
     target_data: tuple,
     minimum_periapsis_radius_km: float,
+    maximum_corridor_insertion_delta_v_km_s: float,
 ) -> dict:
     planet_mu = G_KM3_KG_S2 * target_data[2]
     planet_radius_km = target_data[3] / 1_000
@@ -382,7 +433,16 @@ def _propagate_inside_sphere(
     )
     desired_departure_direction = entry.get("desiredDepartureDirection")
     clock_candidates = range(0, 360, 5) if desired_departure_direction else (0,)
-    steering_candidates: list[dict] = []
+    steering_candidates: list[dict] = [{
+        "clockAngleDeg": -1.0,
+        "targetPeriapsisRadiusKm": entry["predictedPeriapsisRadiusKm"],
+        "relativeVelocity": entry_relative_velocity,
+        "heliocentricVelocity": entry["arrivalVelocity"],
+        "predictedDirection": entry["predictedOutgoingDirection"],
+        "predictedTurnDeg": entry["predictedTurnDeg"],
+        "alignmentDeg": entry["lookaheadAlignmentDeg"],
+        "deltaVKmS": 0.0,
+    }]
     periapsis_factors = (
         (1.0, 1.25, 1.6, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0)
         if desired_departure_direction
@@ -448,9 +508,18 @@ def _propagate_inside_sphere(
                     heliocentric_velocity, entry["arrivalVelocity"]
                 )),
             })
+    affordable_steering = [
+        item for item in steering_candidates
+        if item["deltaVKmS"]
+        <= maximum_corridor_insertion_delta_v_km_s + 1e-9
+    ]
     selected_steering = min(
-        steering_candidates,
-        key=lambda item: (item["alignmentDeg"], item["deltaVKmS"]),
+        affordable_steering or steering_candidates,
+        key=(
+            (lambda item: (item["alignmentDeg"], item["deltaVKmS"]))
+            if affordable_steering
+            else (lambda item: (item["deltaVKmS"], item["alignmentDeg"]))
+        ),
     )
     steered_arrival_velocity = selected_steering["heliocentricVelocity"]
     initial_state = [*entry["entryPosition"], *steered_arrival_velocity]
@@ -590,7 +659,7 @@ def classify_route_sections(raw_sections: object) -> dict:
     if any(not isinstance(raw, dict) for raw in raw_sections):
         return {"solver": "invalid", "reason": "malformed-route-section"}
 
-    propagable_planets = {row[0] for row in PLANET_EPHEMERIDES}
+    propagable_solar_bodies = {"sun", *(row[0] for row in PLANET_EPHEMERIDES)}
     first_origin = str(raw_sections[0].get("originId") or "")
     target_ids = [
         str(raw.get("targetId") or "")
@@ -599,7 +668,7 @@ def classify_route_sections(raw_sections: object) -> dict:
     unknown_targets = [
         target_id
         for target_id in target_ids
-        if target_id not in propagable_planets
+        if target_id not in propagable_solar_bodies
         and target_id not in INTERSTELLAR_ROUTE_TARGETS
     ]
     interstellar_indices = [
@@ -826,6 +895,11 @@ def simulate_route_sections(values: dict | None) -> dict:
             fixed_arrival_day=first_arrival_day if index == 0 else None,
             minimum_periapsis_radius_km=target_data[3] / 1_000 + flyby_altitude_km,
             lookahead_target_id=lookahead_target_id,
+            maximum_transition_delta_v_km_s=(
+                mission.config.oberth_delta_v_km_s
+                if index == 0
+                else sections[index - 1]["deltaVPlusKmS"]
+            ),
         )
         transfer_start_index = len(trajectory) - 1
         transfer_trajectory, propagated_position, propagated_velocity = (
@@ -850,6 +924,7 @@ def simulate_route_sections(values: dict | None) -> dict:
             target_ephemeris=target_ephemeris,
             target_data=target_data,
             minimum_periapsis_radius_km=target_data[3] / 1_000 + flyby_altitude_km,
+            maximum_corridor_insertion_delta_v_km_s=section["deltaVPlusKmS"],
         )
         trajectory[transfer_end_index]["velocityKmS"] = list(
             local["steeredArrivalVelocity"]
@@ -891,6 +966,17 @@ def simulate_route_sections(values: dict | None) -> dict:
             "minimumAltitudeKm": local["minimumRadiusKm"] - local["planetRadiusKm"],
             "sphereOfInfluenceRadiusKm": transfer["sphereOfInfluenceKm"],
             "requiredTransitionDeltaVKmS": transfer["injectionDeltaVKmS"],
+            "availableTransitionDeltaVKmS": (
+                mission.config.oberth_delta_v_km_s
+                if index == 0
+                else sections[index - 1]["deltaVPlusKmS"]
+            ),
+            "transitionDeltaVDeficitKmS": transfer["transitionDeltaVDeficitKmS"],
+            "departureRadialSpeedKmS": transfer["departureRadialSpeedKmS"],
+            "departureDirectionChangeDeg": transfer["departureDirectionChangeDeg"],
+            "backtracksFromOuterTarget": transfer["backtracksFromOuterTarget"],
+            "transferDurationDays": transfer["durationSeconds"] / DAY_SECONDS,
+            "lambertDiagnostics": transfer["lambertDiagnostics"],
             "corridorInsertionDeltaVKmS": local["corridorInsertionDeltaVKmS"],
             "entryVelocityPreserved": local["entryVelocityPreserved"],
             "lookaheadTargetId": transfer["lookaheadTargetId"],
@@ -972,6 +1058,19 @@ def simulate_route_sections(values: dict | None) -> dict:
         for index, section in enumerate(calculated_sections)
         if index > 0 and section["requiredTransitionDeltaVKmS"] > 0.05
     ]
+    if (
+        calculated_sections[0]["requiredTransitionDeltaVKmS"]
+        > calculated_sections[0]["availableTransitionDeltaVKmS"] + 1e-9
+    ):
+        warnings.insert(
+            0,
+            (
+                "Solarer Austritt benÃ¶tigt Î”v "
+                f"{calculated_sections[0]['requiredTransitionDeltaVKmS']:.2f} km/s; "
+                "verfÃ¼gbar sind "
+                f"{calculated_sections[0]['availableTransitionDeltaVKmS']:.2f} km/s."
+            ),
+        )
     warnings.extend(
         (
             f"Korridoreinschuss bei {section['targetName']} benötigt Δv "
@@ -982,6 +1081,38 @@ def simulate_route_sections(values: dict | None) -> dict:
         if section["corridorInsertionDeltaVKmS"]
         > sections[index]["deltaVPlusKmS"] + 1e-9
     )
+    solar_periapsis_index = segments[0]["endIndex"]
+    solar_periapsis_radius_km = _magnitude(
+        tuple(trajectory[solar_periapsis_index]["positionKm"])
+    )
+    solar_corridor_radius_km = max(
+        0.12 * AU_KM,
+        min(0.35 * AU_KM, solar_periapsis_radius_km * 3.0),
+    )
+    solar_entry_index = 0
+    for trajectory_index in range(solar_periapsis_index - 1, -1, -1):
+        if (
+            _magnitude(tuple(trajectory[trajectory_index]["positionKm"]))
+            >= solar_corridor_radius_km
+        ):
+            solar_entry_index = trajectory_index
+            break
+    solar_exit_index = solar_periapsis_index
+    for trajectory_index in range(solar_periapsis_index + 1, len(trajectory)):
+        if (
+            _magnitude(tuple(trajectory[trajectory_index]["positionKm"]))
+            >= solar_corridor_radius_km
+        ):
+            solar_exit_index = trajectory_index
+            break
+    solar_entry_position = tuple(trajectory[solar_entry_index]["positionKm"])
+    solar_exit_position = tuple(trajectory[solar_exit_index]["positionKm"])
+    solar_entry_direction = _normalize(solar_entry_position)
+    solar_exit_direction = _normalize(solar_exit_position)
+    solar_angular_momentum = _cross(
+        tuple(trajectory[solar_periapsis_index]["positionKm"]),
+        tuple(trajectory[solar_periapsis_index]["velocityKmS"]),
+    )
     return {
         "startDate": mission.config.start_date,
         "totalFlightDays": trajectory[-1]["elapsedDays"],
@@ -989,6 +1120,27 @@ def simulate_route_sections(values: dict | None) -> dict:
         "trajectory": trajectory,
         "segments": segments,
         "routeSections": calculated_sections,
+        "solarPassage": {
+            "entryIndex": solar_entry_index,
+            "periapsisIndex": solar_periapsis_index,
+            "exitIndex": solar_exit_index,
+            "corridorRadiusKm": solar_corridor_radius_km,
+            "periapsisRadiusKm": solar_periapsis_radius_km,
+            "entryPositionKm": list(solar_entry_position),
+            "exitPositionKm": list(solar_exit_position),
+            "entryDirection": list(solar_entry_direction),
+            "exitDirection": list(solar_exit_direction),
+            "passageAngleDeg": _angle_deg(
+                solar_entry_direction,
+                solar_exit_direction,
+            ),
+            "orbitDirection": (
+                "prograde" if solar_angular_momentum[2] >= 0 else "retrograde"
+            ),
+            "outboundAfterPeriapsis": (
+                calculated_sections[0]["departureRadialSpeedKmS"] >= -0.02
+            ),
+        },
         "stateChain": {
             "continuousPosition": True,
             "exitStateFeedsNextSection": True,
@@ -1095,10 +1247,15 @@ def simulate_route_sections(values: dict | None) -> dict:
             "observationWindowHours": (
                 (first["exitDay"] - first["entryDay"]) * 24
             ),
-            "targetAlignmentDeg": 0.0,
+            "targetAlignmentDeg": calculated_sections[-1]["lookaheadAlignmentDeg"],
+            "actualTargetAlignmentDeg": calculated_sections[-1]["lookaheadAlignmentDeg"],
             "feasibleWithConfiguredBurn": (
-                calculated_sections[0]["requiredTransitionDeltaVKmS"]
-                <= mission.config.oberth_delta_v_km_s + 1e-9
+                all(
+                    section["requiredTransitionDeltaVKmS"]
+                    <= section["availableTransitionDeltaVKmS"] + 1e-9
+                    for section in calculated_sections
+                    if section.get("sectionType") != "interstellar-asymptote"
+                )
                 and all(
                     section["corridorInsertionDeltaVKmS"]
                     <= sections[index]["deltaVPlusKmS"] + 1e-9

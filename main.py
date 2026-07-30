@@ -55,8 +55,43 @@ def _write_calculation_activity(
 ) -> None:
     calculation_values = {
         **flatten_scalar_values(values, "input", limit=30),
-        **flatten_scalar_values(result or {}, "result", limit=90),
+        **flatten_scalar_values(result or {}, "result", limit=70),
     }
+    if isinstance(result, dict):
+        for index, section in enumerate(result.get("routeSections") or []):
+            corridor = section.get("corridor") or {}
+            prefix = f"audit.routeSections.{index}"
+            calculation_values[f"{prefix}.targetId"] = section.get("targetId")
+            calculation_values[f"{prefix}.entryInsideCorridor"] = corridor.get(
+                "entryInsideCorridor"
+            )
+            calculation_values[f"{prefix}.requiredTransitionDeltaVKmS"] = section.get(
+                "requiredTransitionDeltaVKmS"
+            )
+            calculation_values[f"{prefix}.corridorInsertionDeltaVKmS"] = section.get(
+                "corridorInsertionDeltaVKmS"
+            )
+            calculation_values[f"{prefix}.lookaheadAlignmentDeg"] = section.get(
+                "lookaheadAlignmentDeg"
+            )
+            calculation_values[f"{prefix}.availableTransitionDeltaVKmS"] = section.get(
+                "availableTransitionDeltaVKmS"
+            )
+            calculation_values[f"{prefix}.transitionDeltaVDeficitKmS"] = section.get(
+                "transitionDeltaVDeficitKmS"
+            )
+            calculation_values[f"{prefix}.departureRadialSpeedKmS"] = section.get(
+                "departureRadialSpeedKmS"
+            )
+            calculation_values[f"{prefix}.departureDirectionChangeDeg"] = section.get(
+                "departureDirectionChangeDeg"
+            )
+            calculation_values[f"{prefix}.backtracksFromOuterTarget"] = section.get(
+                "backtracksFromOuterTarget"
+            )
+            calculation_values[f"{prefix}.transferDurationDays"] = section.get(
+                "transferDurationDays"
+            )
     write_activity(
         source="backend",
         category="calculation",

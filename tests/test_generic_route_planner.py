@@ -224,8 +224,88 @@ class GenericRoutePlannerTests(unittest.TestCase):
 
         selection = result["routeSections"][1]["corridor"]["exitAngleSelection"]
         self.assertEqual(selection["requestedAngleDeg"], 540.0)
-        self.assertGreaterEqual(selection["selectedAngleDeg"], 360.0)
-        self.assertLess(selection["selectedAngleDeg"], 720.0)
+        self.assertGreaterEqual(selection["selectedAngleDeg"], 540.0)
+        self.assertLess(selection["selectedAngleDeg"], 900.0)
+        self.assertTrue(selection["lineOfSightClear"])
+
+    def test_solar_passage_extends_to_clear_future_jupiter_tangency(self):
+        solar = section("earth", "sun", "solar-passage")
+        solar["passage"] = {
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 270,
+            "orbitDirection": "prograde",
+            "entryBehavior": "ballistic",
+            "exitBehavior": "ballistic",
+        }
+
+        result = self.calculate([
+            solar,
+            section("sun", "jupiter", "sun-jupiter"),
+        ])
+
+        calculated = result["routeSections"][0]
+        selection = calculated["corridor"]["exitAngleSelection"]
+        self.assertEqual(calculated["requestedPassageAngleDeg"], 270.0)
+        self.assertGreaterEqual(calculated["selectedPassageAngleDeg"], 270.0)
+        self.assertEqual(
+            calculated["selectedPassageAngleDeg"],
+            selection["selectedAngleDeg"],
+        )
+        self.assertTrue(selection["lineOfSightClear"])
+        self.assertGreater(selection["departureClearanceKm"], 0.0)
+        self.assertGreaterEqual(selection["autoExtendedAngleDeg"], 0.0)
+        self.assertTrue(result["validation"]["collisionFree"])
+
+    def test_retrograde_passage_uses_a_different_clear_tangency(self):
+        def solar(direction):
+            requested = section("earth", "sun", f"solar-{direction}")
+            requested["passage"] = {
+                "mode": "partial-orbit",
+                "orbitAngleDeg": 270,
+                "orbitDirection": direction,
+                "entryBehavior": "ballistic",
+                "exitBehavior": "ballistic",
+            }
+            return requested
+
+        prograde = self.calculate([
+            solar("prograde"),
+            section("sun", "jupiter", "prograde-jupiter"),
+        ])["routeSections"][0]["corridor"]["exitAngleSelection"]
+        retrograde = self.calculate([
+            solar("retrograde"),
+            section("sun", "jupiter", "retrograde-jupiter"),
+        ])["routeSections"][0]["corridor"]["exitAngleSelection"]
+
+        self.assertTrue(prograde["lineOfSightClear"])
+        self.assertTrue(retrograde["lineOfSightClear"])
+        self.assertNotEqual(
+            prograde["desiredExitRadialDirection"],
+            retrograde["desiredExitRadialDirection"],
+        )
+
+    def test_internal_followup_target_uses_curved_best_approximation(self):
+        earth = section("sun", "earth", "earth-passage")
+        earth["passage"] = {
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 180,
+            "orbitDirection": "prograde",
+            "entryBehavior": "ballistic",
+            "exitBehavior": "ballistic",
+        }
+
+        result = self.calculate([
+            earth,
+            section("earth", "earth-moon", "earth-moon"),
+        ])
+
+        selection = result["routeSections"][0]["corridor"]["exitAngleSelection"]
+        self.assertFalse(selection["lineOfSightClear"])
+        self.assertTrue(selection["bestApproximation"])
+        self.assertTrue(selection["requiresCurvedTransfer"])
+        self.assertGreater(selection["straightLineClearanceDeficitKm"], 0.0)
+        self.assertTrue(result["validation"]["collisionFree"])
+        self.assertTrue(any("beste Annäherung" in warning for warning in result["warnings"]))
 
 
 if __name__ == "__main__":

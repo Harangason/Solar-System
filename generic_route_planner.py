@@ -402,40 +402,69 @@ def _targeted_passage_angle_deg(
         epoch_days + future_day,
         catalog,
     )
-    desired_direction = _normalize(_subtract(lookahead_position, target_position))
-    projected = _subtract(
-        desired_direction,
-        tuple(_dot(desired_direction, normal) * component for component in normal),
+    relative_target = _subtract(lookahead_position, target_position)
+    projected_target = _subtract(
+        relative_target,
+        tuple(_dot(relative_target, normal) * component for component in normal),
     )
-    if _magnitude(projected) < 1e-9:
+    projected_distance = _magnitude(projected_target)
+    if projected_distance < 1e-6:
         return requested_angle, {
-            "method": "lookahead projection degenerate",
+            "method": "future target projection degenerate",
             "lookaheadTargetId": lookahead_target.id,
             "requestedAngleDeg": requested_angle,
             "selectedAngleDeg": requested_angle,
+            "autoExtendedAngleDeg": 0.0,
+            "lineOfSightClear": False,
+            "bestApproximation": True,
+            "futureTargetDistanceKm": projected_distance,
+            "keepOutRadiusKm": entry_radius,
         }
-    projected = _normalize(projected)
-    cross = _cross(entry_direction, projected)
-    signed_angle = atan2(_dot(normal, cross), _dot(entry_direction, projected)) * 180 / pi
+    projected_direction = _normalize(projected_target)
+    has_external_tangency = projected_distance > entry_radius + 1e-6
+    tangency_offset = (
+        acos(max(-1.0, min(1.0, entry_radius / projected_distance)))
+        if has_external_tangency
+        else pi / 2
+    )
+    desired_exit_radial = _normalize(_rotate_vector(
+        projected_direction,
+        normal,
+        -direction_sign * tangency_offset,
+    ))
+    cross = _cross(entry_direction, desired_exit_radial)
+    signed_angle = (
+        atan2(_dot(normal, cross), _dot(entry_direction, desired_exit_radial))
+        * 180
+        / pi
+    )
     directed_angle = signed_angle if direction_sign > 0 else -signed_angle
     directed_angle = directed_angle % 360.0
-    if directed_angle < 1e-6:
-        directed_angle = 360.0 if passage["mode"] == "full-orbit" else 0.0
-    complete_turns = (
-        1
-        if passage["mode"] == "full-orbit"
-        else int(requested_angle // 360.0)
-    )
-    selected_angle = complete_turns * 360.0 + directed_angle
-    if passage["mode"] == "full-orbit" and directed_angle >= 359.999:
-        selected_angle = directed_angle
+    minimum_angle = 360.0 if passage["mode"] == "full-orbit" else requested_angle
+    selected_angle = directed_angle
+    while selected_angle + 1e-6 < minimum_angle:
+        selected_angle += 360.0
+    departure_clearance = entry_radius - target.radius_km
     return selected_angle, {
-        "method": "projected future target direction",
+        "method": (
+            "future target tangency with minimum passage"
+            if has_external_tangency
+            else "best tangential departure for curved internal transfer"
+        ),
         "lookaheadTargetId": lookahead_target.id,
         "requestedAngleDeg": requested_angle,
         "selectedAngleDeg": selected_angle,
+        "autoExtendedAngleDeg": max(0.0, selected_angle - requested_angle),
         "transferPreviewDays": transfer_seconds / DAY_SECONDS,
-        "desiredExitDirection": list(projected),
+        "desiredExitDirection": list(projected_direction),
+        "desiredExitRadialDirection": list(desired_exit_radial),
+        "lineOfSightClear": has_external_tangency,
+        "bestApproximation": not has_external_tangency,
+        "requiresCurvedTransfer": not has_external_tangency,
+        "futureTargetDistanceKm": projected_distance,
+        "keepOutRadiusKm": entry_radius,
+        "departureClearanceKm": departure_clearance,
+        "straightLineClearanceDeficitKm": max(0.0, entry_radius - projected_distance),
     }
 
 
@@ -771,6 +800,8 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             "lookaheadAlignmentDeg": 0.0,
             "predictedPassiveTurnDeg": 0.0,
             "passage": section["passage"],
+            "requestedPassageAngleDeg": section["passage"]["orbitAngleDeg"],
+            "selectedPassageAngleDeg": abs(passage_result["exitAngleDeg"]),
             "corridor": {
                 "enabled": corridor["enabled"],
                 "centerDirection": list(direction),
@@ -830,6 +861,18 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
         if section["requiredSectionDeltaVKmS"]
         > parsed[index]["deltaVPlusKmS"] + 1e-9
     ]
+    warnings.extend(
+        (
+            f"Abschnitt {index + 1} besitzt keine direkte Außentangente zum "
+            "Folgeziel. Der kollisionsgeprüfte gekrümmte Transfer wird als "
+            "beste Annäherung verwendet."
+        )
+        for index, section in enumerate(calculated)
+        if (
+            section["corridor"].get("exitAngleSelection")
+            and section["corridor"]["exitAngleSelection"].get("bestApproximation")
+        )
+    )
     final_velocity = tuple(trajectory[-1].get("velocityKmS", start_velocity))
     minimum_solar_radius_km = min(
         _magnitude(tuple(point["positionKm"])) for point in trajectory

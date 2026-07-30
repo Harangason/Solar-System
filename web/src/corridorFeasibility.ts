@@ -3,6 +3,7 @@ import type { EntryCorridorDefinition } from './entryCorridorGeometry'
 export interface CorridorTargetPhysics {
   radiusKm?: number
   surfaceGravity?: number
+  allowCurvedApproach?: boolean
 }
 
 export interface CorridorFeasibility {
@@ -134,9 +135,12 @@ export function evaluateCorridorFeasibility(
       ],
     )
   }))
-  const clearanceBlocked = minimumPathClearanceRatio <= safetyRadiusRatio
+  const clearanceBlocked = (
+    !target.allowCurvedApproach
+    && minimumPathClearanceRatio <= safetyRadiusRatio
+  )
   const sourceAxisSeparationDeg = Math.acos(Math.max(-1, Math.min(1, center[0]))) * 180 / Math.PI
-  const behindOrigin = sourceAxisSeparationDeg
+  const behindOrigin = !target.allowCurvedApproach && sourceAxisSeparationDeg
     + Math.max(definition.horizontalHalfAngleDeg, definition.verticalHalfAngleDeg) >= 90
   const reasons = [
     ...(clearanceBlocked

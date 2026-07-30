@@ -7,6 +7,7 @@
     "dev": "vite --port 30001",
     "build": "tsc -b && vite build",
     "preview": "vite preview --port 30000",
+    "test:constellation-graph": "node --experimental-strip-types scripts/constellation-graph-consistency.mjs",
     "test:route-sketch": "node --experimental-strip-types scripts/route-sketch-consistency.mjs"
   },
   "dependencies": {

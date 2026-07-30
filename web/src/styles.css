@@ -70,6 +70,8 @@ button { font: inherit; }
 .best-constellation-button { margin-left: auto; border-color: rgba(255,218,103,.45); color: #ffe999; background: rgba(255,218,103,.08); }
 .best-constellation-button:hover:not(:disabled),
 .best-constellation-button:focus-visible:not(:disabled) { border-color: #ffdc62; color: #08111d; background: #ffdc62; outline: none; }
+.constellation-result-select { display: flex; align-items: center; gap: 6px; color: #9eb7ca; font-size: .7rem; }
+.constellation-result-select select { min-width: 245px; max-width: 330px; padding: 8px 28px 8px 10px; border: 1px solid rgba(255,218,103,.35); border-radius: 6px; color: #eaf8ff; background: #091426; }
 .constellation-search-status { margin: -7px 4px 12px; color: #ffe999; font-size: .72rem; font-weight: 650; }
 .two-d-footnote,
 .corridor-instruction { margin: 8px 4px; color: #8fa7bc; font-size: .72rem; }
@@ -83,7 +85,19 @@ button { font: inherit; }
 .orbital-background { fill: #031027; }
 .ecliptic-line { stroke: rgba(255,255,255,.28); stroke-width: .06; stroke-dasharray: .28 .22; }
 .planet-orbit-path { fill: none; stroke-width: .085; stroke-opacity: .72; }
-.planned-route-path-2d { fill: none; stroke: #7dff9f; stroke-width: .16; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 .16px rgba(125,255,159,.9)); }
+.planned-route-path-2d { fill: none; stroke-width: .16; stroke-linecap: round; stroke-linejoin: round; }
+.planned-route-path-2d.feasible { stroke: #7dff9f; filter: drop-shadow(0 0 .16px rgba(125,255,159,.9)); }
+.planned-route-path-2d.proposal { stroke: #ffda67; stroke-dasharray: .42 .22; filter: drop-shadow(0 0 .14px rgba(255,218,103,.72)); }
+.solar-passage-state-2d .solar-corridor { fill: none; stroke-width: .22; stroke-linecap: round; }
+.solar-passage-state-2d .solar-corridor.entry { stroke: #79ddff; }
+.solar-passage-state-2d .solar-corridor.exit { stroke: #65f0b7; }
+.solar-passage-state-2d .solar-state { stroke: #061426; stroke-width: .08; }
+.solar-passage-state-2d .solar-state.entry { fill: #79ddff; }
+.solar-passage-state-2d .solar-state.periapsis { fill: #fff0a0; }
+.solar-passage-state-2d .solar-state.exit { fill: #65f0b7; }
+.solar-passage-state-2d text { fill: #d8f4ff; font-size: .52px; paint-order: stroke; stroke: #061426; stroke-width: .13px; }
+.solar-passage-state-2d.blocked .solar-corridor.exit,
+.solar-passage-state-2d.blocked .solar-state.exit { stroke: #ff6f7f; fill: #ff6f7f; }
 .route-sketch-path { fill: none; stroke: #ffda67; stroke-width: .14; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: .48 .28; filter: drop-shadow(0 0 .18px rgba(255,218,103,.78)); }
 .route-sketch-path.passage-arc { stroke-width: .18; stroke-dasharray: .55 .24; }
 .route-sketch-path.interstellar { stroke: #ffe56d; stroke-dasharray: .68 .32; }
@@ -117,8 +131,12 @@ button { font: inherit; }
 .orbit-inclination-legend strong { color: #e8f5ff; }
 .two-d-planet-details { max-height: 72vh; overflow: hidden; border: 1px solid rgba(121,228,255,.18); border-radius: 18px; color: #dff3ff; background: rgba(3,9,20,.9); box-shadow: 0 24px 70px rgba(0,0,0,.32); }
 .two-d-planet-details header { display: flex; align-items: center; gap: 11px; padding: 16px; border-bottom: 1px solid rgba(255,255,255,.09); }
+.planet-detail-heading { min-width: 0; flex: 1; }
 .two-d-planet-details header h2 { margin: 2px 0 0; font-size: 1.35rem; }
 .two-d-planet-details header small { color: #819cb1; font-size: .65rem; }
+.planet-detail-selector { display: block; margin-top: 9px; }
+.planet-detail-selector select { width: 100%; padding: 7px 9px; border: 1px solid rgba(121,228,255,.22); border-radius: 7px; color: #eef8ff; background: #0c1728; cursor: pointer; }
+.planet-detail-selector select:focus-visible { border-color: #79e4ff; outline: 2px solid rgba(121,228,255,.22); outline-offset: 1px; }
 .planet-detail-color { flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid rgba(255,255,255,.65); border-radius: 50%; box-shadow: 0 0 15px currentColor; }
 .two-d-planet-details dl { display: grid; grid-template-columns: 1fr 1fr; margin: 0; padding: 8px; gap: 1px; background: rgba(255,255,255,.07); }
 .two-d-planet-details dl div { min-width: 0; padding: 9px; background: #071120; }
@@ -246,13 +264,11 @@ button { font: inherit; }
 .route-passage-edit:hover,
 .route-passage-edit:focus-visible { border-color: #8be8ff; color: #06111d; background: #8be8ff; outline: none; }
 .route-section-actions { display: flex; justify-content: flex-end; gap: 5px; }
+.route-section-actions > button:first-child { width: 76px; }
 .route-section-actions button.danger { border-color: rgba(255,101,119,.25); color: #ff9ba7; background: rgba(255,101,119,.06); }
 .route-section-actions button.danger:hover,
 .route-section-actions button.danger:focus-visible { border-color: #ff6577; color: white; background: #b72e42; }
 .route-section-actions button:disabled { cursor: not-allowed; opacity: .35; }
-.route-preview-open { align-self: end; padding: 9px 12px; border: 1px solid rgba(121,223,248,.32); border-radius: 9px; color: #dff8ff; background: rgba(121,223,248,.08); cursor: pointer; font-size: .68rem; font-weight: 740; }
-.route-preview-open:hover,
-.route-preview-open:focus-visible { border-color: #8be8ff; color: #06111d; background: #8be8ff; outline: none; }
 .route-section-wizard { display: flex; flex-direction: column; width: min(680px, calc(100vw - 32px)); max-height: min(760px, calc(100dvh - 32px)); overflow: hidden; padding: 0; border: 1px solid rgba(121,228,255,.34); border-radius: 20px; color: #eaf8ff; background: #07101f; box-shadow: 0 30px 110px rgba(0,0,0,.75); }
 .route-section-wizard > header,
 .wizard-progress,
@@ -348,6 +364,14 @@ button { font: inherit; }
 .preview-corridor { fill: rgba(255,218,103,.09); stroke: none; }
 .preview-waypoint { fill: #dff8ff; stroke: #07101f; stroke-width: 2; }
 .preview-exit-target { fill: #63f0a6; stroke: #dff8ff; stroke-width: 2; opacity: .88; }
+.route-preview-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; padding: 9px 11px; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; color: #9db4c7; background: #081322; font-size: .62rem; }
+.route-preview-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.route-preview-legend i { display: inline-block; width: 24px; height: 0; border-top: 3px solid; }
+.route-preview-legend i.entry { border-color: #79e7ff; }
+.route-preview-legend i.passage { border-color: #fff; }
+.route-preview-legend i.prediction { border-color: #63f0a6; }
+.route-preview-legend i.heading { border-color: rgba(99,240,166,.58); border-top-width: 2px; border-top-style: dashed; }
+.route-preview-legend i.boundary { border-color: #ffe070; border-top-style: dashed; }
 .route-preview-state { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1px; overflow: hidden; margin: 14px 0; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: rgba(255,255,255,.07); }
 .route-preview-state div { padding: 11px; background: #0a1525; }
 .route-preview-state dt { margin-bottom: 5px; color: #7892a8; font-size: .58rem; text-transform: uppercase; }
@@ -815,6 +839,10 @@ button { font: inherit; }
   .mission-layout > .parameter-panel { grid-column: 1; position: relative; top: auto; right: auto; left: auto; width: auto; height: auto; min-height: 0; }
   .target-controls { position: absolute; top: 72px; left: 50%; width: min(92vw, 420px); height: auto; max-height: calc(62vh - 82px); border: 1px solid rgba(121,228,255,.25); border-radius: 12px; background: rgba(2,5,13,.9); transform: translateX(-50%); }
   .view-heading { align-items: start; flex-direction: column; }
+  .best-constellation-button,
+  .orbit-zoom-control { margin-left: 0; }
+  .constellation-result-select { flex: 1 1 100%; }
+  .constellation-result-select select { flex: 1; min-width: 0; max-width: none; }
   .two-d-orbit-workspace { grid-template-columns: 1fr; }
   .two-d-planet-details { max-height: none; }
   .two-d-moon-section ul { max-height: 240px; }
@@ -850,6 +878,9 @@ button { font: inherit; }
   .choice-grid { grid-template-columns: 1fr; }
   .choice-card { min-height: 200px; padding: 26px; }
   .view-panel { padding-top: 28px; }
+  .two-d-view-tabs { width: 100%; }
+  .constellation-result-select { align-items: stretch; flex-direction: column; width: 100%; }
+  .constellation-result-select select { width: 100%; }
   .wizard-progress { padding-inline: 13px; }
   .wizard-progress li { gap: 4px; font-size: .55rem; }
   .wizard-progress li:not(:last-child)::after { display: none; }

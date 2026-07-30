@@ -35,7 +35,6 @@ interface PlanetCorridorPlannerProps {
   onDeltaVMinusChange: (value: number) => void
   onDeltaVPlusChange: (value: number) => void
   sectionNumber: number
-  onPreviewRoute: () => void
   passageDirection?: RoutePassageDirection
 }
 
@@ -109,7 +108,6 @@ export function PlanetCorridorPlanner({
   onDeltaVMinusChange,
   onDeltaVPlusChange,
   sectionNumber,
-  onPreviewRoute,
   passageDirection = 'prograde',
 }: PlanetCorridorPlannerProps) {
   const svgRef = useRef<SVGSVGElement>(null)
@@ -127,6 +125,7 @@ export function PlanetCorridorPlanner({
   const targetPhysics: CorridorTargetPhysics = {
     radiusKm: selectedTarget && 'radiusKm' in selectedTarget ? selectedTarget.radiusKm : undefined,
     surfaceGravity: selectedTarget && 'surfaceGravity' in selectedTarget ? selectedTarget.surfaceGravity : undefined,
+    allowCurvedApproach: true,
   }
   const targetColor = selectedTarget && 'color' in selectedTarget
     ? selectedTarget.color
@@ -218,6 +217,7 @@ export function PlanetCorridorPlanner({
     const nextTargetPhysics: CorridorTargetPhysics = {
       radiusKm: target && 'radiusKm' in target ? target.radiusKm : undefined,
       surfaceGravity: target && 'surfaceGravity' in target ? target.surfaceGravity : undefined,
+      allowCurvedApproach: true,
     }
     onWaypointChange(targetId)
     onDefinitionChange((current) => withCorridorFeasibility(current, nextTargetPhysics))
@@ -270,9 +270,6 @@ export function PlanetCorridorPlanner({
           <small>Aktiver Abschnitt {String(sectionNumber).padStart(2, '0')}</small>
           <strong>{originName} → {selectedTarget?.name ?? 'Ziel'}</strong>
         </div>
-        <button type="button" className="route-preview-open" onClick={onPreviewRoute}>
-          Route ansehen
-        </button>
         <label>
           <span>Ursprung</span>
           <select value={originId} onChange={(event) => onOriginChange(event.target.value)}>
