@@ -12,6 +12,7 @@ import {
 } from 'react'
 import * as THREE from 'three'
 
+import { activityRequestHeaders } from '../activityLog'
 import { INTERSTELLAR_TARGETS } from '../interstellarTargets'
 import { interstellarTargetPosition } from '../celestialCoordinates'
 import { withCorridorFeasibility, type CorridorTargetPhysics } from '../corridorFeasibility'
@@ -116,6 +117,7 @@ interface ThreeDViewProps {
   onEntryCorridorChange: Dispatch<SetStateAction<EntryCorridorDefinition>>
   waypointId: string
   onWaypointChange: Dispatch<SetStateAction<string>>
+  plannedMissionDate: string | null
   onPlannedMissionDateChange: Dispatch<SetStateAction<string | null>>
   plannedRoute: WaypointRouteResult | null
   onPlannedRouteChange: Dispatch<SetStateAction<WaypointRouteResult | null>>
@@ -162,6 +164,7 @@ export function ThreeDView({
   onEntryCorridorChange,
   waypointId,
   onWaypointChange: setWaypointId,
+  plannedMissionDate,
   onPlannedMissionDateChange: setPlannedMissionDate,
   plannedRoute,
   onPlannedRouteChange: setPlannedRoute,
@@ -204,12 +207,7 @@ export function ThreeDView({
     setMissionResultVisible(false)
     setElapsedDays(0)
     setPlaying(false)
-  }, [
-    projectLoadToken,
-    restoredMissionConfig,
-    restoredMissionResult,
-    restoredVisualConfig,
-  ])
+  }, [projectLoadToken])
   useEffect(() => {
     if (pendingMissionConfigRef.current !== undefined && pendingMissionConfigRef.current !== draft) return
     pendingMissionConfigRef.current = undefined
@@ -237,7 +235,7 @@ export function ThreeDView({
   const [navigationMode, setNavigationMode] = useState<'rotate' | 'pan'>('rotate')
   const [missionPlannerOpen, setMissionPlannerOpen] = useState(() => window.innerWidth >= 1_100)
   const [parameterPanelOpen, setParameterPanelOpen] = useState(() => window.innerWidth >= 1_440)
-  const [selectedTargetId, setSelectedTargetId] = useState('proxima-centauri')
+  const [selectedTargetId, setSelectedTargetId] = useState('')
   const [encounterDay, setEncounterDay] = useState(730)
   const [flybyAltitudeKm, setFlybyAltitudeKm] = useState(100_000)
   const [flybyMode, setFlybyMode] = useState<'acceleration' | 'observation'>('acceleration')
@@ -298,6 +296,12 @@ export function ThreeDView({
   const corridorBlockMessage = entryCorridor.blockReasons?.join(' ')
     || 'Der Zielkorridor verletzt den Mindestabstand oder liegt auf der vom Ursprung abgewandten Seite.'
   const routeCalculationBlockReason = routePassageCalculationBlockReason(routeSections)
+
+  useEffect(() => {
+    if (!plannedMissionDate || draft.startDate === plannedMissionDate) return
+    setDraft((current) => ({ ...current, startDate: plannedMissionDate }))
+    setOptimizationStartDate(plannedMissionDate)
+  }, [draft.startDate, plannedMissionDate])
 
   const handleInfoDragChange = useCallback((label: string, active: boolean) => {
     setActiveInfoDrags((current) => {
@@ -642,6 +646,12 @@ export function ThreeDView({
     return planet ? scaledRadius(planet, data.sun.radiusKm, visual) : 0.01
   }, [data, visual, waypointId])
   const selectedTarget = INTERSTELLAR_TARGETS.find((target) => target.id === selectedTargetId)
+  useEffect(() => {
+    if (selectedTargetId || routeSections.length === 0) return
+    const finalTargetId = routeSections.at(-1)?.targetId
+    if (!finalTargetId || !INTERSTELLAR_TARGETS.some((target) => target.id === finalTargetId)) return
+    setSelectedTargetId(finalTargetId)
+  }, [routeSections, selectedTargetId])
   const timestampMs = new Date(activeStartDate).getTime() + elapsedDays * 86_400_000
   const focusedPlanet = cameraFocusRequest.kind === 'planet'
     ? data?.planets.find((planet) => planet.id === cameraFocusRequest.planetId) ?? null
@@ -991,7 +1001,7 @@ export function ThreeDView({
     try {
       const response = await fetch('/api/route/simulate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           mission: draft,
           visual,
@@ -1049,9 +1059,7 @@ export function ThreeDView({
         setDirectSolarRoute(null)
         setShowAlternativeRoutes(false)
         setPlaying(false)
-        return
       }
-      setOptimizationPreflight(null)
       const optimized = await requestLaunchOptimization({
         mission: draft,
         waypointId,
@@ -1071,12 +1079,21 @@ export function ThreeDView({
       })
       setOptimizationResult(optimized)
       if (!optimized.plausible) {
-        // A numerically converged search minimum is not automatically a
-        // flyable mission. Keep the last confirmed route visible and expose
-        // this run only as a diagnostic recommendation.
+        // A rejected search minimum is still useful guidance: keep it visible
+        // as an approach suggestion in the shared 2D/3D route state, but do
+        // not promote its mission result as a validated flight.
+        setEncounterDay(optimized.optimizedEncounterDay)
+        setOptimizationStartDate(optimized.optimizedStartDate)
+        setOptimizationWindowDays(optimized.optimizedSearchWindowDays)
+        setDraft((current) => ({ ...current, startDate: optimized.optimizedStartDate }))
+        setPlannedRoute(optimized.route)
+        setPlannedMissionDate(optimized.optimizedStartDate)
         setDirectSolarRoute(null)
         setShowAlternativeRoutes(false)
+        setShowRouteGuide(true)
+        setElapsedDays(0)
         setPlaying(false)
+        setRouteError('Noch nicht flugfähig, aber als Annäherungsvorschlag in 2D/3D übernommen. Passe Korridor, Datum oder Budget weiter an.')
         return
       }
       // Feed the converged boundary values back into the three coupled input
@@ -1676,11 +1693,11 @@ export function ThreeDView({
           <button className="ai-primary-action" type="button" disabled={optimizationLoading || routeLoading || routePlanStatus !== 'confirmed' || corridorBlocked} onClick={() => void optimizeLaunchWindow()}>{optimizationLoading ? 'KI koppelt Sonne, Jupiter und Ziel …' : routePlanStatus === 'confirmed' ? 'Route mit KI bidirektional optimieren' : 'Zuerst Routenplan bestätigen'}</button>
           <label className="optimizer-check"><span>Zyklisch neu rechnen</span><input type="checkbox" checked={autoReoptimize} onChange={(event) => setAutoReoptimize(event.target.checked)} /></label>
           {autoReoptimize && <label><span>Intervall (min)</span><input type="number" min="1" step="1" value={recalculationMinutes} onChange={(event) => setRecalculationMinutes(event.target.valueAsNumber)} /></label>}
-          {optimizationPreflight && !optimizationPreflight.energeticallyReachable && (
+          {optimizationPreflight && !optimizationPreflight.energeticallyReachable && !optimizationResult && (
             <div className="optimizer-result optimizer-result-blocked">
               <div className="optimizer-result-status">
-                <strong>Keine Suche gestartet</strong>
-                <span>Die harte Antriebsgrenze wurde vor der Kalendersuche erkannt. Die bestätigte Route bleibt unverändert.</span>
+                <strong>Harte Budgetgrenze erkannt</strong>
+                <span>Die gewünschte Geschwindigkeit ist mit dem aktuellen Oberth-Impuls nicht erreichbar. Die Konstellationssuche läuft trotzdem weiter und ermittelt die beste geometrische Annäherung.</span>
               </div>
               <div className="optimizer-limit-card">
                 <strong>Hauptursache · Zielgeschwindigkeit außerhalb des Antriebsbudgets</strong>
@@ -1714,8 +1731,8 @@ export function ThreeDView({
           {optimizationResult && (
             <div className={`optimizer-result optimizer-result-${optimizationResult.plausible ? 'success' : 'blocked'}`}>
               <div className="optimizer-result-status">
-                <strong>{optimizationResult.plausible ? 'Flugfähige Route gefunden' : 'Keine flugfähige Route gefunden'}</strong>
-                <span>{optimizationResult.plausible ? 'Vollmodell und Antriebsbudget sind erfüllt.' : 'Die bisher bestätigte Route bleibt unverändert. Dieses Suchminimum wird nicht als Mission übernommen.'}</span>
+                <strong>{optimizationResult.plausible ? 'Flugfähige Route gefunden' : 'Verbesserter Arbeitsvorschlag gefunden'}</strong>
+                <span>{optimizationResult.plausible ? 'Vollmodell und Antriebsbudget sind erfüllt.' : 'Das beste Suchminimum ist in 2D/3D sichtbar und bildet den Ausgangspunkt der nächsten Iteration. Es ist noch nicht als flugfähige Mission validiert.'}</span>
               </div>
               {!optimizationResult.solarEnergyFeasibility.energeticallyReachable && (
                 <div className="optimizer-limit-card">

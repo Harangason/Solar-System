@@ -1,3 +1,7 @@
+import { activityRequestHeaders } from './activityLog'
+import type { RouteSectionDefinition } from './routeSections'
+import type { MissionConfig } from './types'
+
 export type PlaybackEventType =
   | 'checkpoint'
   | 'paused'
@@ -42,7 +46,7 @@ interface PlaybackEventRequest {
 async function postJson<T extends object>(url: string, values: unknown) {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(values),
   })
   const payload = await response.json() as T | { error?: string }
@@ -65,5 +69,3 @@ export function appendPlaybackAuditEvent(values: PlaybackEventRequest) {
     values,
   )
 }
-import type { RouteSectionDefinition } from './routeSections'
-import type { MissionConfig } from './types'

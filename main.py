@@ -1,6 +1,14 @@
 from pathlib import Path
+from time import perf_counter
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+
+from activity_log import (
+    activities_csv,
+    flatten_scalar_values,
+    read_activities,
+    write_activity,
+)
 
 from ephemeris import get_ephemeris_status
 from calculation_audit import (
@@ -16,7 +24,7 @@ from calculation_audit import (
 )
 from trajectory import get_default_mission_config, simulate_mission
 from route_planner import simulate_waypoint_route
-from multi_route_planner import simulate_route_sections
+from multi_route_planner import classify_route_sections, simulate_route_sections
 from mission_optimizer import assess_solar_energy, optimize_launch_window
 from project_store import ProjectStore
 from view_2d_celestials import render_2d_view
@@ -28,6 +36,78 @@ PORT = 5001
 WEB_DIST = Path(__file__).parent / "web" / "dist"
 app = Flask(__name__, static_folder=None)
 project_store = ProjectStore()
+
+
+def _project_id(values: dict | None = None) -> str:
+    values = values or {}
+    return str(values.get("projectId") or request.headers.get("X-Project-Id") or "")
+
+
+def _write_calculation_activity(
+    action: str,
+    started_at: float,
+    *,
+    status: str,
+    values: dict,
+    result: object | None = None,
+    message: str = "",
+    details: dict | None = None,
+) -> None:
+    calculation_values = {
+        **flatten_scalar_values(values, "input", limit=30),
+        **flatten_scalar_values(result or {}, "result", limit=90),
+    }
+    write_activity(
+        source="backend",
+        category="calculation",
+        action=action,
+        status=status,
+        project_id=_project_id(values),
+        duration_ms=(perf_counter() - started_at) * 1_000,
+        message=message,
+        values=calculation_values,
+        details={
+            "routeSectionCount": len(values.get("routeSections") or []),
+            "waypointId": values.get("waypointId"),
+            **(details or {}),
+        },
+    )
+
+
+def _write_optimizer_trace(values: dict, result: dict) -> None:
+    audit = result.get("audit") or {}
+    search_run_id = str(audit.get("runId") or "")
+    project_id = _project_id(values)
+    for item in result.get("history") or []:
+        write_activity(
+            source="backend",
+            category="calculation",
+            action="optimizer-iteration",
+            status="success",
+            project_id=project_id,
+            values=flatten_scalar_values(item, limit=40),
+            details={
+                "searchRunId": search_run_id,
+                "stage": "adaptive-refinement",
+            },
+        )
+    for candidate in result.get("fullValidationCandidates") or []:
+        reasons = candidate.get("rejectionReasons") or []
+        write_activity(
+            source="backend",
+            category="calculation",
+            action="optimizer-full-validation",
+            status="success" if candidate.get("plausible") else "rejected",
+            project_id=project_id,
+            message=" | ".join(str(reason) for reason in reasons),
+            values=flatten_scalar_values(candidate, limit=60),
+            details={
+                "searchRunId": search_run_id,
+                "stage": "full-model-validation",
+                "role": candidate.get("role"),
+                "rejectionKind": "" if candidate.get("plausible") else "constraint",
+            },
+        )
 
 
 @app.after_request
@@ -103,26 +183,140 @@ def delete_project(project_id: str):
 
 @app.post("/api/mission/simulate")
 def mission_simulation():
+    started_at = perf_counter()
+    values = request.get_json(silent=True) or {}
     try:
-        result = simulate_mission(request.get_json(silent=True) or {})
+        result = simulate_mission(values)
     except ValueError as error:
+        _write_calculation_activity(
+            "mission-simulate",
+            started_at,
+            status="rejected",
+            values=values,
+            message=str(error),
+        )
         return jsonify({"error": str(error)}), 400
     except RuntimeError as error:
+        _write_calculation_activity(
+            "mission-simulate",
+            started_at,
+            status="error",
+            values=values,
+            message=str(error),
+        )
         return jsonify({"error": str(error)}), 422
-    return jsonify(result.to_dict())
+    payload = result.to_dict()
+    _write_calculation_activity(
+        "mission-simulate",
+        started_at,
+        status="success",
+        values=values,
+        result=payload,
+    )
+    return jsonify(payload)
 
 
 @app.post("/api/route/simulate")
 def waypoint_route_simulation():
+    started_at = perf_counter()
+    values = request.get_json(silent=True) or {}
+    route_classification = (
+        classify_route_sections(values.get("routeSections"))
+        if values.get("routeSections")
+        else {"solver": "waypoint", "reason": "legacy-waypoint-request"}
+    )
     try:
-        values = request.get_json(silent=True) or {}
         if values.get("routeSections"):
-            return jsonify(simulate_route_sections(values))
-        return jsonify(simulate_waypoint_route(values))
+            result = simulate_route_sections(values)
+        else:
+            result = simulate_waypoint_route(values)
     except ValueError as error:
+        _write_calculation_activity(
+            "route-simulate",
+            started_at,
+            status="rejected",
+            values=values,
+            message=str(error),
+            details={
+                **route_classification,
+                "rejectionKind": "structural-or-constraint",
+            },
+        )
         return jsonify({"error": str(error)}), 400
     except RuntimeError as error:
+        _write_calculation_activity(
+            "route-simulate",
+            started_at,
+            status="error",
+            values=values,
+            message=str(error),
+            details={
+                **route_classification,
+                "rejectionKind": "numerical",
+            },
+        )
         return jsonify({"error": str(error)}), 422
+    _write_calculation_activity(
+        "route-simulate",
+        started_at,
+        status="success",
+        values=values,
+        result=result,
+        details=route_classification,
+    )
+    return jsonify(result)
+
+
+@app.post("/api/activity")
+def append_activity():
+    values = request.get_json(silent=True) or {}
+    try:
+        record = write_activity(
+            source=str(values.get("source") or "frontend"),
+            category=str(values.get("category") or "ui"),
+            action=str(values.get("action") or "unknown"),
+            status=str(values.get("status") or "success"),
+            project_id=str(values.get("projectId") or ""),
+            duration_ms=values.get("durationMs"),
+            message=str(values.get("message") or ""),
+            values=values.get("values"),
+            details=values.get("details"),
+        )
+    except (TypeError, ValueError) as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify(record), 201
+
+
+@app.get("/api/activity")
+def activity_entries():
+    try:
+        records = read_activities(
+            limit=int(request.args.get("limit", 250)),
+            category=request.args.get("category", ""),
+            status=request.args.get("status", ""),
+            project_id=request.args.get("projectId", ""),
+        )
+    except ValueError:
+        return jsonify({"error": "Das Abfragelimit ist ungültig."}), 400
+    return jsonify({"activities": records, "count": len(records)})
+
+
+@app.get("/api/activity/export.csv")
+def activity_csv_export():
+    try:
+        records = read_activities(
+            limit=int(request.args.get("limit", 5_000)),
+            category=request.args.get("category", ""),
+            status=request.args.get("status", ""),
+            project_id=request.args.get("projectId", ""),
+        )
+    except ValueError:
+        return jsonify({"error": "Das Abfragelimit ist ungültig."}), 400
+    return Response(
+        activities_csv(records),
+        content_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=solar-system-activities.csv"},
+    )
 
 
 @app.get("/api/audit/latest-route")
@@ -157,18 +351,69 @@ def optimizer_audit_log():
 
 @app.post("/api/audit/playback/start")
 def start_playback_log():
+    values = request.get_json(silent=True) or {}
     try:
-        return jsonify(start_playback_audit(request.get_json(silent=True) or {}))
+        result = start_playback_audit(values)
     except (TypeError, ValueError) as error:
+        write_activity(
+            source="backend",
+            category="playback",
+            action="playback-start",
+            status="error",
+            project_id=_project_id(values),
+            message=str(error),
+        )
         return jsonify({"error": str(error)}), 400
+    write_activity(
+        source="backend",
+        category="playback",
+        action="playback-start",
+        project_id=_project_id(values),
+        values={
+            "playbackEndDay": values.get("playbackEndDay"),
+            "routeSectionCount": len(values.get("routeSections") or []),
+        },
+        details={
+            "playbackId": result.get("playbackId"),
+            "originId": values.get("originId"),
+            "targetId": values.get("targetId"),
+        },
+    )
+    return jsonify(result)
 
 
 @app.post("/api/audit/playback/event")
 def append_playback_log_event():
+    values = request.get_json(silent=True) or {}
     try:
-        return jsonify(write_playback_event(request.get_json(silent=True) or {}))
+        result = write_playback_event(values)
     except (TypeError, ValueError) as error:
+        write_activity(
+            source="backend",
+            category="playback",
+            action=str(values.get("eventType") or "playback-event"),
+            status="error",
+            project_id=_project_id(values),
+            message=str(error),
+        )
         return jsonify({"error": str(error)}), 400
+    write_activity(
+        source="backend",
+        category="playback",
+        action=str(values.get("eventType") or "playback-event"),
+        project_id=_project_id(values),
+        values={
+            "sequence": values.get("sequence"),
+            "missionDay": values.get("missionDay"),
+            **flatten_scalar_values(values.get("state") or {}, "state", limit=12),
+        },
+        details={
+            "playbackId": values.get("playbackId"),
+            "sectionId": values.get("sectionId"),
+            "sectionLabel": values.get("sectionLabel"),
+        },
+    )
+    return jsonify(result)
 
 
 @app.get("/api/audit/latest-playback")
@@ -198,20 +443,69 @@ def calculation_methods():
 
 @app.post("/api/mission/optimize-launch-window")
 def launch_window_optimization():
+    started_at = perf_counter()
+    values = request.get_json(silent=True) or {}
     try:
-        return jsonify(optimize_launch_window(request.get_json(silent=True) or {}))
+        result = optimize_launch_window(values)
     except ValueError as error:
+        _write_calculation_activity(
+            "optimize-launch-window",
+            started_at,
+            status="rejected",
+            values=values,
+            message=str(error),
+        )
         return jsonify({"error": str(error)}), 400
     except RuntimeError as error:
+        _write_calculation_activity(
+            "optimize-launch-window",
+            started_at,
+            status="error",
+            values=values,
+            message=str(error),
+        )
         return jsonify({"error": str(error)}), 422
+    _write_optimizer_trace(values, result)
+    _write_calculation_activity(
+        "optimize-launch-window",
+        started_at,
+        status="success",
+        values=values,
+        result=result,
+        details={
+            "searchRunId": (result.get("audit") or {}).get("runId"),
+            "resultKind": "flight-ready" if result.get("plausible") else "best-effort",
+            "stopReason": result.get("stopReason"),
+            "iterations": result.get("iterations"),
+            "evaluations": result.get("evaluations"),
+        },
+    )
+    return jsonify(result)
 
 
 @app.post("/api/mission/assess-solar-energy")
 def solar_energy_assessment():
+    started_at = perf_counter()
+    values = request.get_json(silent=True) or {}
     try:
-        return jsonify(assess_solar_energy(request.get_json(silent=True) or {}))
+        result = assess_solar_energy(values)
     except ValueError as error:
+        _write_calculation_activity(
+            "assess-solar-energy",
+            started_at,
+            status="rejected",
+            values=values,
+            message=str(error),
+        )
         return jsonify({"error": str(error)}), 400
+    _write_calculation_activity(
+        "assess-solar-energy",
+        started_at,
+        status="success",
+        values=values,
+        result=result,
+    )
+    return jsonify(result)
 
 
 @app.get("/")

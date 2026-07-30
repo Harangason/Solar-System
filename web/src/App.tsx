@@ -1,5 +1,7 @@
-import { lazy, Suspense, useCallback, useState, type Dispatch, type SetStateAction } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 
+import { logActivity, setActivityProjectId } from './activityLog'
+import { ActivitySettingsDialog } from './components/ActivitySettingsDialog'
 import { ProjectDialog } from './components/ProjectDialog'
 import type { EntryCorridorDefinition } from './entryCorridorGeometry'
 import {
@@ -38,7 +40,76 @@ export function App() {
   const [projectBusy, setProjectBusy] = useState(false)
   const [projectError, setProjectError] = useState<string | null>(null)
   const [projectStatus, setProjectStatus] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const activeRouteSection = routeSections.find((section) => section.id === activeRouteSectionId) ?? routeSections[0]
+
+  useEffect(() => {
+    setActivityProjectId(projectId)
+  }, [projectId])
+
+  useEffect(() => {
+    const controlName = (control: Element) => (
+      control.getAttribute('aria-label')
+      || control.textContent?.replace(/\s+/g, ' ').trim()
+      || control.getAttribute('name')
+      || control.tagName.toLocaleLowerCase('de-DE')
+    ).slice(0, 180)
+    const onClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element
+        ? event.target.closest('button, a[href], [role="button"]')
+        : null
+      if (!target || !target.closest('.app-shell')) return
+      logActivity({
+        category: 'ui',
+        action: target instanceof HTMLAnchorElement ? 'link-click' : 'button-click',
+        projectId,
+        details: {
+          control: controlName(target),
+          view: viewMode,
+        },
+      })
+    }
+    const onChange = (event: Event) => {
+      const target = event.target
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return
+      if (!target.closest('.app-shell')) return
+      const isCheckbox = target instanceof HTMLInputElement && target.type === 'checkbox'
+      const includeValue = target instanceof HTMLSelectElement
+        || (target instanceof HTMLInputElement && ['range', 'number', 'checkbox', 'radio'].includes(target.type))
+      logActivity({
+        category: 'ui',
+        action: 'control-change',
+        projectId,
+        values: includeValue
+          ? { value: isCheckbox ? target.checked : target.value }
+          : undefined,
+        details: {
+          control: controlName(target),
+          controlType: target instanceof HTMLSelectElement ? 'select' : target.type,
+          view: viewMode,
+        },
+      })
+    }
+    const onPointerUp = (event: globalThis.PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof HTMLCanvasElement) || !target.closest('.app-shell')) return
+      logActivity({
+        category: 'ui',
+        action: 'canvas-interaction',
+        projectId,
+        values: { x: Math.round(event.clientX), y: Math.round(event.clientY) },
+        details: { view: viewMode },
+      })
+    }
+    document.addEventListener('click', onClick)
+    document.addEventListener('change', onChange)
+    document.addEventListener('pointerup', onPointerUp)
+    return () => {
+      document.removeEventListener('click', onClick)
+      document.removeEventListener('change', onChange)
+      document.removeEventListener('pointerup', onPointerUp)
+    }
+  }, [projectId, viewMode])
 
   const setEntryCorridor: Dispatch<SetStateAction<EntryCorridorDefinition>> = useCallback((action) => {
     setRouteSections((current) => current.map((section) => {
@@ -92,12 +163,26 @@ export function App() {
     setProjectError(null)
     try {
       const stored = await createProject(name, description, currentProjectState())
+      logActivity({
+        category: 'project',
+        action: 'project-created',
+        projectId: stored.id,
+        values: { revision: stored.revision, routeSectionCount: stored.state.routeSections.length },
+        details: { name: stored.name },
+      })
       setProjectId(stored.id)
       setProjectName(stored.name)
       setProjectDescription(stored.description)
       setProjectStatus(`${stored.name} · Revision ${stored.revision} gespeichert`)
       setProjectDialogMode(null)
     } catch (error) {
+      logActivity({
+        category: 'project',
+        action: 'project-create',
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+        details: { name },
+      })
       setProjectError(error instanceof Error ? error.message : String(error))
     } finally {
       setProjectBusy(false)
@@ -112,8 +197,22 @@ export function App() {
     setProjectError(null)
     try {
       const stored = await updateProject(projectId, projectName, projectDescription, currentProjectState())
+      logActivity({
+        category: 'project',
+        action: 'project-saved',
+        projectId: stored.id,
+        values: { revision: stored.revision, routeSectionCount: stored.state.routeSections.length },
+        details: { name: stored.name },
+      })
       setProjectStatus(`${stored.name} · Revision ${stored.revision} gespeichert`)
     } catch (error) {
+      logActivity({
+        category: 'project',
+        action: 'project-save',
+        status: 'error',
+        projectId,
+        message: error instanceof Error ? error.message : String(error),
+      })
       setProjectStatus('')
       setProjectError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -125,6 +224,13 @@ export function App() {
     setProjectError(null)
     try {
       const stored = await loadProject(selectedProjectId)
+      logActivity({
+        category: 'project',
+        action: 'project-opened',
+        projectId: stored.id,
+        values: { revision: stored.revision, routeSectionCount: stored.state.routeSections.length },
+        details: { name: stored.name },
+      })
       setRouteSections(stored.state.routeSections)
       setActiveRouteSectionId(stored.state.activeRouteSectionId || stored.state.routeSections[0]?.id || '')
       setPlannedMissionDate(stored.state.plannedMissionDate)
@@ -140,6 +246,13 @@ export function App() {
       setViewMode(stored.state.viewMode)
       setProjectDialogMode(null)
     } catch (error) {
+      logActivity({
+        category: 'project',
+        action: 'project-open',
+        status: 'error',
+        projectId: selectedProjectId,
+        message: error instanceof Error ? error.message : String(error),
+      })
       setProjectError(error instanceof Error ? error.message : String(error))
     } finally {
       setProjectBusy(false)
@@ -150,6 +263,11 @@ export function App() {
     setProjectError(null)
     try {
       await deleteProject(selectedProjectId)
+      logActivity({
+        category: 'project',
+        action: 'project-deleted',
+        projectId: selectedProjectId,
+      })
       setProjects((current) => current.filter((project) => project.id !== selectedProjectId))
       if (selectedProjectId === projectId) {
         setProjectId('')
@@ -158,6 +276,13 @@ export function App() {
         setProjectStatus('Projekt gelöscht · aktueller Plan ist noch ungespeichert geöffnet')
       }
     } catch (error) {
+      logActivity({
+        category: 'project',
+        action: 'project-delete',
+        status: 'error',
+        projectId: selectedProjectId,
+        message: error instanceof Error ? error.message : String(error),
+      })
       setProjectError(error instanceof Error ? error.message : String(error))
     } finally {
       setProjectBusy(false)
@@ -171,8 +296,9 @@ export function App() {
           <span className="brand-mark" aria-hidden="true" />
           Unser Sonnensystem
         </button>
-        {viewMode !== 'menu' && (
-          <div className="topbar-actions">
+        <div className="topbar-actions">
+          {viewMode !== 'menu' && (
+            <>
             <div className="project-actions" aria-label="Projektverwaltung">
               <span title={projectStatus || undefined}>{projectName || 'Ungespeichertes Projekt'}</span>
               <button type="button" disabled={projectBusy} onClick={() => void saveCurrentProject()}>Speichern</button>
@@ -187,9 +313,20 @@ export function App() {
                 3D
               </button>
             </nav>
-          </div>
-        )}
+            </>
+          )}
+          <button className="settings-button" type="button" onClick={() => setSettingsOpen(true)}>
+            Settings
+          </button>
+        </div>
       </header>
+
+      {settingsOpen && (
+        <ActivitySettingsDialog
+          projectId={projectId}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
 
       {projectDialogMode && (
         <ProjectDialog
@@ -234,7 +371,10 @@ export function App() {
                 activeRouteSectionId={activeRouteSectionId}
                 onActiveRouteSectionChange={setActiveRouteSectionId}
                 plannedMissionDate={plannedMissionDate}
+                onPlannedMissionDateChange={setPlannedMissionDate}
                 plannedRoute={plannedRoute}
+                onPlannedRouteChange={setPlannedRoute}
+                missionConfig={missionConfig}
               />
             )
             : (
@@ -244,6 +384,7 @@ export function App() {
                 onEntryCorridorChange={setEntryCorridor}
                 waypointId={activeRouteSection?.targetId ?? ''}
                 onWaypointChange={setWaypointId}
+                plannedMissionDate={plannedMissionDate}
                 onPlannedMissionDateChange={setPlannedMissionDate}
                 plannedRoute={plannedRoute}
                 onPlannedRouteChange={setPlannedRoute}

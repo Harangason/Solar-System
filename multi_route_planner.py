@@ -583,6 +583,60 @@ def _angle_deg(first: tuple, second: tuple) -> float:
     return acos(max(-1.0, min(1.0, _dot(_normalize(first), _normalize(second))))) * 180 / pi
 
 
+def classify_route_sections(raw_sections: object) -> dict:
+    """Select the propagation model and expose the decision for diagnostics."""
+    if not isinstance(raw_sections, list) or not raw_sections:
+        return {"solver": "invalid", "reason": "missing-route-sections"}
+    if any(not isinstance(raw, dict) for raw in raw_sections):
+        return {"solver": "invalid", "reason": "malformed-route-section"}
+
+    propagable_planets = {row[0] for row in PLANET_EPHEMERIDES}
+    first_origin = str(raw_sections[0].get("originId") or "")
+    target_ids = [
+        str(raw.get("targetId") or "")
+        for raw in raw_sections
+    ]
+    unknown_targets = [
+        target_id
+        for target_id in target_ids
+        if target_id not in propagable_planets
+        and target_id not in INTERSTELLAR_ROUTE_TARGETS
+    ]
+    interstellar_indices = [
+        index
+        for index, target_id in enumerate(target_ids)
+        if target_id in INTERSTELLAR_ROUTE_TARGETS
+    ]
+    has_non_direct_passage = any(
+        parse_route_passage(raw.get("passage")).get("mode") != "direct"
+        for raw in raw_sections
+    )
+    has_terminal_interstellar_asymptote = (
+        len(interstellar_indices) == 1
+        and interstellar_indices[0] == len(target_ids) - 1
+    )
+
+    if unknown_targets:
+        return {
+            "solver": "generic",
+            "reason": "unknown-or-nonplanet-target",
+            "unknownTargets": unknown_targets,
+        }
+    if first_origin != "sun":
+        return {"solver": "generic", "reason": "freely-selected-origin"}
+    if has_terminal_interstellar_asymptote:
+        return {
+            "solver": "coupled-interstellar",
+            "reason": "solar-planet-chain-with-terminal-asymptote",
+        }
+    if has_non_direct_passage:
+        return {
+            "solver": "generic",
+            "reason": "explicit-local-passage-without-interstellar-asymptote",
+        }
+    return {"solver": "coupled-solar-oberth", "reason": "supported-solar-planet-chain"}
+
+
 def simulate_route_sections(values: dict | None) -> dict:
     """Propagate the complete ordered 2D route-section list in one state chain."""
     values = values or {}
@@ -590,23 +644,14 @@ def simulate_route_sections(values: dict | None) -> dict:
     if not isinstance(raw_sections, list) or not raw_sections:
         raise ValueError("Mindestens ein 2D-Routenabschnitt ist erforderlich.")
 
-    propagable_planets = {row[0] for row in PLANET_EPHEMERIDES}
-    first_origin = str((raw_sections[0] or {}).get("originId") or "")
-    has_non_planet_target = any(
-        str((raw or {}).get("targetId") or "") not in propagable_planets
-        and str((raw or {}).get("targetId") or "") not in INTERSTELLAR_ROUTE_TARGETS
-        for raw in raw_sections
-    )
-    has_non_direct_passage = any(
-        parse_route_passage((raw or {}).get("passage")).get("mode") != "direct"
-        for raw in raw_sections
-        if isinstance(raw, dict)
-    )
+    route_classification = classify_route_sections(raw_sections)
+    if route_classification["solver"] == "invalid":
+        raise ValueError("Mindestens ein gültiger 2D-Routenabschnitt ist erforderlich.")
     # Keep the specialised high-accuracy solar-Oberth chain only for the
     # mission it actually models.  Every freely selected origin, and every
     # Sun/moon endpoint, must use the selected bodies instead of an implicit
     # Earth departure.
-    if first_origin != "sun" or has_non_planet_target or has_non_direct_passage:
+    if route_classification["solver"] == "generic":
         return simulate_generic_route_sections(values)
 
     sections: list[dict] = []
@@ -663,7 +708,12 @@ def simulate_route_sections(values: dict | None) -> dict:
     start_position = burn_point.position_km
     start_velocity = burn_point.velocity_km_s
     start_day = burn_point.elapsed_days
-    first_arrival_day = float(values.get("encounterDay", 730.0))
+    raw_first_arrival_day = values.get("encounterDay")
+    first_arrival_day = (
+        None
+        if raw_first_arrival_day is None
+        else float(raw_first_arrival_day)
+    )
     flyby_altitude_km = max(100.0, float(values.get("flybyAltitudeKm", 100_000.0)))
     calculated_sections: list[dict] = []
     total_transition_delta_v = 0.0

@@ -4,6 +4,8 @@ export type RoutePassageMode = 'direct' | 'partial-orbit' | 'full-orbit'
 export type RoutePassageDirection = 'prograde' | 'retrograde'
 export type RouteBoundaryBehavior = 'ballistic' | 'tangential-prograde' | 'tangential-retrograde' | 'tangential-accelerate' | 'radial'
 
+export const MAX_PARTIAL_ORBIT_ANGLE_DEG = 1080
+
 export interface RoutePassageDefinition {
   mode: RoutePassageMode
   orbitAngleDeg: number

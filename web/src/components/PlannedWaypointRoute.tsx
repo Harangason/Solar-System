@@ -164,6 +164,7 @@ export interface WaypointRouteResult {
   }
   routeSections?: Array<{
     id: string
+    sectionType?: string
     originId: string
     targetId: string
     targetName: string

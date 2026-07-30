@@ -22,6 +22,9 @@ button { font: inherit; }
 .project-actions button:hover,
 .project-actions button:focus-visible { border-color: #8be8ff; color: #06111d; background: #8be8ff; outline: none; }
 .project-actions button:disabled { cursor: wait; opacity: .45; }
+.settings-button { padding: 7px 10px; border: 1px solid rgba(255,255,255,.13); border-radius: 7px; color: #c4d5e1; background: rgba(255,255,255,.045); cursor: pointer; font-size: .64rem; }
+.settings-button:hover,
+.settings-button:focus-visible { border-color: #ffda67; color: #fff4c5; background: rgba(255,218,103,.1); outline: none; }
 .view-switcher { display: flex; padding: 4px; gap: 4px; border: 1px solid rgba(255,255,255,.12); border-radius: 999px; }
 .view-switcher button { min-width: 58px; padding: 7px 15px; border: 0; border-radius: 999px; background: transparent; color: #9eb1c9; cursor: pointer; }
 .view-switcher button.active { background: #f4f7ff; color: #07101f; }
@@ -57,16 +60,42 @@ button { font: inherit; }
 .two-d-view-tabs { display: flex; flex-wrap: wrap; gap: 5px; }
 .two-d-actionbar output { margin-left: auto; padding: 6px 11px; border: 1px solid rgba(121,228,255,.18); border-radius: 999px; color: #a9c5d8; font-size: .72rem; font-variant-numeric: tabular-nums; }
 .two-d-actionbar output.mission-epoch { border-color: rgba(255,218,103,.35); color: #ffe89a; background: rgba(255,218,103,.07); }
+.orbit-zoom-control { display: flex; align-items: center; gap: 7px; margin-left: auto; padding: 4px 8px; border: 1px solid rgba(121,228,255,.18); border-radius: 999px; color: #a9c5d8; font-size: .66rem; }
+.orbit-zoom-control button { width: 24px; height: 24px; padding: 0; border: 1px solid rgba(121,228,255,.28); border-radius: 50%; color: #dff8ff; background: rgba(121,228,255,.08); cursor: pointer; line-height: 1; }
+.orbit-zoom-control button:hover,
+.orbit-zoom-control button:focus-visible { border-color: #8be8ff; color: #06111d; background: #8be8ff; outline: none; }
+.orbit-zoom-control input { width: 105px; accent-color: #8be8ff; }
+.orbit-zoom-control output { margin-left: 0; min-width: 42px; padding: 0; border: 0; color: #eaf8ff; background: transparent; text-align: right; }
+.orbit-zoom-control + output { margin-left: 0; }
+.best-constellation-button { margin-left: auto; border-color: rgba(255,218,103,.45); color: #ffe999; background: rgba(255,218,103,.08); }
+.best-constellation-button:hover:not(:disabled),
+.best-constellation-button:focus-visible:not(:disabled) { border-color: #ffdc62; color: #08111d; background: #ffdc62; outline: none; }
+.constellation-search-status { margin: -7px 4px 12px; color: #ffe999; font-size: .72rem; font-weight: 650; }
 .two-d-footnote,
 .corridor-instruction { margin: 8px 4px; color: #8fa7bc; font-size: .72rem; }
 .two-d-orbit-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, 320px); gap: 12px; align-items: start; }
-.orbital-plot { overflow: hidden; padding: 0; }
-.orbital-plot svg { display: block; width: 100%; max-height: 72vh; }
-.orbital-plot.top svg { aspect-ratio: 1; margin: auto; }
+.orbital-plot { overflow: auto; padding: 0; cursor: grab; user-select: none; touch-action: none; overscroll-behavior: contain; scrollbar-color: #38506c transparent; scrollbar-gutter: stable; }
+.orbital-plot.panning { cursor: grabbing; }
+.orbital-plot.panning svg { pointer-events: none; }
+.orbital-plot svg { display: block; width: var(--orbit-zoom-width, 100%); height: var(--orbit-zoom-width, 100%); min-width: 100%; min-height: 100%; max-width: none; max-height: none; }
+.orbital-plot.top { height: min(72vh, 760px); }
+.orbital-plot.side { height: min(58vh, 560px); }
 .orbital-background { fill: #031027; }
 .ecliptic-line { stroke: rgba(255,255,255,.28); stroke-width: .06; stroke-dasharray: .28 .22; }
 .planet-orbit-path { fill: none; stroke-width: .085; stroke-opacity: .72; }
 .planned-route-path-2d { fill: none; stroke: #7dff9f; stroke-width: .16; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 .16px rgba(125,255,159,.9)); }
+.route-sketch-path { fill: none; stroke: #ffda67; stroke-width: .14; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: .48 .28; filter: drop-shadow(0 0 .18px rgba(255,218,103,.78)); }
+.route-sketch-path.passage-arc { stroke-width: .18; stroke-dasharray: .55 .24; }
+.route-sketch-path.interstellar { stroke: #ffe56d; stroke-dasharray: .68 .32; }
+.route-sketch-path.out-of-plane { stroke: #80ecff; stroke-width: .2; stroke-dasharray: .34 .18 .08 .18; filter: drop-shadow(0 0 .22px rgba(128,236,255,.92)); }
+.route-sketch-node { stroke: #07101f; stroke-width: .06; }
+.route-sketch-node.origin { fill: #79e7ff; }
+.route-sketch-node.target { fill: #ffda67; }
+.route-sketch-label-2d { display: none; }
+.interstellar-direction-marker text { fill: #ffe56d; font-size: .52px; font-weight: 700; paint-order: stroke; stroke: #031027; stroke-width: .12; pointer-events: none; }
+.interstellar-direction-marker line { stroke: #7dff9f; stroke-width: .13; stroke-dasharray: .45 .25; }
+.interstellar-direction-marker.draft line { stroke: #ffda67; }
+#interstellar-direction-arrow path { fill: #7dff9f; }
 .planned-route-states-2d circle { stroke: #07101f; stroke-width: .07; }
 .planned-route-states-2d .entry { fill: #65ddff; }
 .planned-route-states-2d .periapsis { fill: #ffe171; }
@@ -314,11 +343,12 @@ button { font: inherit; }
 .preview-min-boundary,
 .preview-max-boundary { fill: none; stroke: #ffe070; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 9 7; opacity: .9; }
 .preview-passage-path { fill: none; stroke: #ffffff; stroke-width: 4; stroke-linecap: round; filter: drop-shadow(0 0 5px rgba(121,223,248,.45)); }
+.preview-target-heading { stroke: rgba(99,240,166,.34); stroke-width: 2; stroke-dasharray: 7 8; }
 .preview-exit-path { fill: none; stroke: #63f0a6; stroke-width: 4; stroke-linecap: round; }
 .preview-corridor { fill: rgba(255,218,103,.09); stroke: none; }
 .preview-waypoint { fill: #dff8ff; stroke: #07101f; stroke-width: 2; }
 .preview-exit-target { fill: #63f0a6; stroke: #dff8ff; stroke-width: 2; opacity: .88; }
-.route-preview-state { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; overflow: hidden; margin: 14px 0; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: rgba(255,255,255,.07); }
+.route-preview-state { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1px; overflow: hidden; margin: 14px 0; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: rgba(255,255,255,.07); }
 .route-preview-state div { padding: 11px; background: #0a1525; }
 .route-preview-state dt { margin-bottom: 5px; color: #7892a8; font-size: .58rem; text-transform: uppercase; }
 .route-preview-state dd { margin: 0; color: #f1fbff; font-size: .7rem; line-height: 1.35; }
@@ -556,6 +586,41 @@ button { font: inherit; }
 .project-list label > span > span { color: #9aafc0; font-size: .65rem; }
 .project-list-empty { padding: 35px; border: 1px dashed rgba(255,255,255,.12); border-radius: 10px; color: #8097a9; text-align: center; }
 .project-dialog-error { margin: 14px 0 0; padding: 9px 11px; border: 1px solid rgba(255,91,125,.4); border-radius: 8px; color: #ffc1cd; background: rgba(255,49,91,.07); font-size: .65rem; }
+.activity-settings-dialog { display: flex; flex-direction: column; width: min(1180px, calc(100vw - 32px)); height: min(760px, calc(100dvh - 32px)); overflow: hidden; padding: 0; border: 1px solid rgba(121,228,255,.34); border-radius: 8px; color: #eaf8ff; background: #07101f; box-shadow: 0 30px 110px rgba(0,0,0,.78); }
+.activity-settings-dialog::backdrop { background: rgba(0,3,10,.78); backdrop-filter: blur(7px); }
+.activity-settings-dialog > header { display: flex; flex: 0 0 auto; align-items: start; justify-content: space-between; gap: 18px; padding: 15px 18px; border-bottom: 1px solid rgba(255,255,255,.09); background: rgba(35,74,108,.18); }
+.activity-settings-dialog > header small { color: #79dff8; font-size: .62rem; font-weight: 750; text-transform: uppercase; }
+.activity-settings-dialog > header h2 { margin: 4px 0 0; font-size: 1.2rem; }
+.activity-settings-dialog > header button { width: 30px; height: 30px; padding: 0; border: 1px solid rgba(255,255,255,.13); border-radius: 50%; color: #b9cad8; background: rgba(255,255,255,.045); cursor: pointer; font-size: 1.2rem; line-height: 1; }
+.activity-settings-dialog > header button:hover,
+.activity-settings-dialog > header button:focus-visible { border-color: #8be8ff; color: #06111d; background: #8be8ff; outline: none; }
+.activity-settings-toolbar { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: end; gap: 9px; padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(2,7,18,.55); }
+.activity-settings-toolbar label:not(.activity-project-filter) { display: grid; gap: 5px; color: #8faabd; font-size: .62rem; }
+.activity-settings-toolbar select { min-width: 140px; padding: 7px 9px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; color: #eaf8ff; background: #0b1728; }
+.activity-project-filter { display: flex; align-items: center; gap: 6px; min-height: 31px; color: #9eb5c7; font-size: .65rem; }
+.activity-project-filter input { accent-color: #8be8ff; }
+.activity-settings-toolbar button,
+.activity-csv-download { min-height: 31px; padding: 7px 10px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; color: #c7dbe8; background: rgba(255,255,255,.05); cursor: pointer; font-size: .65rem; text-decoration: none; }
+.activity-csv-download { border-color: rgba(255,218,103,.38); color: #fff0a8; background: rgba(255,218,103,.07); }
+.activity-settings-toolbar button:hover,
+.activity-settings-toolbar button:focus-visible,
+.activity-csv-download:hover,
+.activity-csv-download:focus-visible { border-color: #8be8ff; color: #06111d; background: #8be8ff; outline: none; }
+.activity-settings-error { margin: 10px 16px 0; padding: 8px 10px; border: 1px solid rgba(255,91,125,.4); border-radius: 6px; color: #ffc1cd; background: rgba(255,49,91,.07); font-size: .65rem; }
+.activity-table-wrap { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-color: #38506c transparent; }
+.activity-table-wrap table { width: 100%; border-collapse: collapse; font-size: .62rem; }
+.activity-table-wrap th { position: sticky; top: 0; z-index: 1; padding: 9px 10px; border-bottom: 1px solid rgba(121,228,255,.2); color: #8fb0c6; background: #081525; text-align: left; white-space: nowrap; }
+.activity-table-wrap td { max-width: 340px; padding: 8px 10px; overflow: hidden; border-bottom: 1px solid rgba(255,255,255,.065); color: #c5d6e2; text-overflow: ellipsis; white-space: nowrap; }
+.activity-table-wrap tr:hover td { background: rgba(121,228,255,.035); }
+.activity-status { display: inline-block; min-width: 62px; padding: 3px 6px; border: 1px solid rgba(255,255,255,.12); border-radius: 4px; text-align: center; }
+.activity-status.success { border-color: rgba(81,240,157,.3); color: #9ff8c7; background: rgba(81,240,157,.055); }
+.activity-status.rejected { border-color: rgba(255,218,103,.34); color: #ffe99b; background: rgba(255,218,103,.055); }
+.activity-status.error { border-color: rgba(255,91,125,.4); color: #ffafbd; background: rgba(255,49,91,.07); }
+.activity-empty { height: 180px; color: #7f98aa !important; text-align: center; }
+.activity-loading { position: absolute; inset: 45% 0 auto; color: #9db2c2; text-align: center; }
+.activity-settings-dialog > footer { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 16px; border-top: 1px solid rgba(255,255,255,.09); background: rgba(2,7,18,.72); }
+.activity-settings-dialog > footer output { color: #829cad; font-size: .63rem; }
+.activity-settings-dialog > footer button { padding: 7px 11px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; color: #c7dbe8; background: rgba(255,255,255,.05); cursor: pointer; }
 .readiness-badge.experimental { color: #ffd06f; background: rgba(255,190,70,.12); }
 .readiness-badge.conceptual { color: #c8a2ff; background: rgba(170,110,255,.14); }
 .readiness-badge.speculative, .readiness-badge.fictional { color: #ff8090; background: rgba(255,80,110,.14); }

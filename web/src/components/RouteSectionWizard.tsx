@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 
 import { ROUTE_INTERSTELLAR_SYSTEMS } from '../interstellarTargets'
 import {
+  MAX_PARTIAL_ORBIT_ANGLE_DEG,
   createRouteSection,
   type RouteBoundaryBehavior,
   type RoutePassageMode,
@@ -72,7 +73,9 @@ function finitePositive(value: number, fallback: number) {
 }
 
 function normalizePartialOrbitAngle(value: number, fallback = 45) {
-  return Number.isFinite(value) ? Math.min(359, Math.max(1, Math.round(value))) : fallback
+  return Number.isFinite(value)
+    ? Math.min(MAX_PARTIAL_ORBIT_ANGLE_DEG, Math.max(1, Math.round(value)))
+    : fallback
 }
 
 export function RouteSectionWizard({
@@ -334,14 +337,14 @@ export function RouteSectionWizard({
                   <input
                     type="number"
                     min="1"
-                    max="360"
+                    max={MAX_PARTIAL_ORBIT_ANGLE_DEG}
                     step="1"
                     disabled={draft.passage.mode === 'full-orbit'}
                     value={draft.passage.mode === 'full-orbit' ? 360 : orbitAngleInput}
                     onChange={(event) => setOrbitAngleInput(event.target.value)}
                     onBlur={commitOrbitAngleInput}
                   />
-                  <small>° · Standard 45, kleinere Winkel erlaubt</small>
+                  <small>1–1080° · 540° entsprechen 1½ Umläufen</small>
                 </label>
                 <label>
                   <span>Umlaufrichtung</span>

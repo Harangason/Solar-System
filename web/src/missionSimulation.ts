@@ -1,4 +1,5 @@
 import type { MissionConfig, MissionResult } from './types'
+import { activityRequestHeaders } from './activityLog'
 import { DEFAULT_PROPULSION_MODULES } from './propulsionModels'
 
 export const AU_KM = 149_597_870.7
@@ -68,7 +69,7 @@ export function validateMissionConfig(config: MissionConfig) {
 export async function requestMissionSimulation(config: MissionConfig, signal?: AbortSignal) {
   const response = await fetch('/api/mission/simulate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(config),
     signal,
   })

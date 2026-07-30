@@ -4,6 +4,7 @@ from multi_route_planner import (
     _corridor_candidates,
     _interstellar_direction,
     _predicted_passive_exit,
+    classify_route_sections,
     simulate_route_sections,
 )
 from route_planner import _parse_entry_corridor
@@ -52,6 +53,43 @@ class MultiRoutePlannerTests(unittest.TestCase):
         self.assertIsNotNone(direction)
         self.assertAlmostEqual(sum(component**2 for component in direction), 1.0)
         self.assertGreater(abs(direction[2]), 0.1)
+
+    def test_terminal_interstellar_asymptote_uses_coupled_solver_with_passage(self):
+        classification = classify_route_sections([
+            {
+                "originId": "sun",
+                "targetId": "jupiter",
+                "passage": {"mode": "partial-orbit", "orbitAngleDeg": 200},
+            },
+            {
+                "originId": "jupiter",
+                "targetId": "proxima-centauri",
+                "passage": {"mode": "direct"},
+            },
+        ])
+
+        self.assertEqual(classification["solver"], "coupled-interstellar")
+        self.assertEqual(
+            classification["reason"],
+            "solar-planet-chain-with-terminal-asymptote",
+        )
+
+    def test_non_interstellar_explicit_passage_still_uses_generic_solver(self):
+        classification = classify_route_sections([
+            {
+                "originId": "sun",
+                "targetId": "jupiter",
+                "passage": {"mode": "partial-orbit", "orbitAngleDeg": 200},
+            },
+        ])
+
+        self.assertEqual(classification["solver"], "generic")
+
+    def test_malformed_route_section_is_classified_without_crashing(self):
+        classification = classify_route_sections([None])
+
+        self.assertEqual(classification["solver"], "invalid")
+        self.assertEqual(classification["reason"], "malformed-route-section")
 
     def test_passive_exit_prediction_does_not_add_speed(self):
         direction, turn_deg = _predicted_passive_exit(

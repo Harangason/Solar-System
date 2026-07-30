@@ -1,5 +1,6 @@
 import type { MissionConfig, MissionResult } from './types'
 import type { EntryCorridorDefinition } from './entryCorridorGeometry'
+import { activityRequestHeaders } from './activityLog'
 import type { WaypointRouteResult } from './components/PlannedWaypointRoute'
 import type { DirectSolarRouteResult } from './components/DirectSolarRoute'
 
@@ -174,7 +175,7 @@ interface SolarEnergyAssessmentRequest {
 export async function requestSolarEnergyAssessment(values: SolarEnergyAssessmentRequest) {
   const response = await fetch('/api/mission/assess-solar-energy', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(values),
   })
   const payload = await response.json() as SolarEnergyFeasibility | { error?: string }
@@ -187,7 +188,7 @@ export async function requestSolarEnergyAssessment(values: SolarEnergyAssessment
 export async function requestLaunchOptimization(values: OptimizationRequest) {
   const response = await fetch('/api/mission/optimize-launch-window', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(values),
   })
   const payload = await response.json() as LaunchOptimizationResult | { error?: string }

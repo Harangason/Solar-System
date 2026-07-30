@@ -62,6 +62,7 @@ KNOWN_MOON_RADII_KM = {
 
 PASSAGE_MODES = {"direct", "partial-orbit", "full-orbit"}
 PASSAGE_DIRECTIONS = {"prograde", "retrograde"}
+MAX_PARTIAL_ORBIT_ANGLE_DEG = 1080.0
 BOUNDARY_BEHAVIORS = {
     "ballistic",
     "tangential-prograde",
@@ -95,7 +96,7 @@ def parse_route_passage(raw: object) -> dict:
         if mode == "direct"
         else 360.0
         if mode == "full-orbit"
-        else max(1.0, min(359.0, requested_angle or 45.0))
+        else max(1.0, min(MAX_PARTIAL_ORBIT_ANGLE_DEG, requested_angle or 45.0))
     )
     return {
         "mode": mode,
@@ -420,11 +421,14 @@ def _targeted_passage_angle_deg(
     directed_angle = directed_angle % 360.0
     if directed_angle < 1e-6:
         directed_angle = 360.0 if passage["mode"] == "full-orbit" else 0.0
-    selected_angle = (
-        360.0 + directed_angle
-        if passage["mode"] == "full-orbit" and directed_angle < 359.999
-        else directed_angle
+    complete_turns = (
+        1
+        if passage["mode"] == "full-orbit"
+        else int(requested_angle // 360.0)
     )
+    selected_angle = complete_turns * 360.0 + directed_angle
+    if passage["mode"] == "full-orbit" and directed_angle >= 359.999:
+        selected_angle = directed_angle
     return selected_angle, {
         "method": "projected future target direction",
         "lookaheadTargetId": lookahead_target.id,

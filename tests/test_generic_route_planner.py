@@ -69,6 +69,22 @@ class GenericRoutePlannerTests(unittest.TestCase):
 
         self.assertEqual(passage["orbitAngleDeg"], 45.0)
 
+    def test_partial_orbit_accepts_one_and_a_half_orbits(self):
+        passage = parse_route_passage({
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 540,
+        })
+
+        self.assertEqual(passage["orbitAngleDeg"], 540.0)
+
+    def test_partial_orbit_is_limited_to_three_orbits(self):
+        passage = parse_route_passage({
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 2000,
+        })
+
+        self.assertEqual(passage["orbitAngleDeg"], 1080.0)
+
     def test_acceleration_boundary_behavior_is_accepted(self):
         passage = parse_route_passage({
             "entryBehavior": "tangential-accelerate",
@@ -189,6 +205,27 @@ class GenericRoutePlannerTests(unittest.TestCase):
         )
         self.assertEqual(earth_return["targetId"], "earth")
         self.assertLess(earth_return["lambertEndpointResidualKm"], 1.0)
+
+    def test_partial_multi_orbit_keeps_complete_turns_when_targeting_exit(self):
+        jupiter = section("sun", "jupiter", "jupiter-orbit")
+        jupiter["passage"] = {
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 540,
+            "orbitDirection": "prograde",
+            "entryBehavior": "ballistic",
+            "exitBehavior": "ballistic",
+        }
+
+        result = self.calculate([
+            section("earth", "sun", "earth-sun"),
+            jupiter,
+            section("jupiter", "earth", "jupiter-earth"),
+        ])
+
+        selection = result["routeSections"][1]["corridor"]["exitAngleSelection"]
+        self.assertEqual(selection["requestedAngleDeg"], 540.0)
+        self.assertGreaterEqual(selection["selectedAngleDeg"], 360.0)
+        self.assertLess(selection["selectedAngleDeg"], 720.0)
 
 
 if __name__ == "__main__":
