@@ -69,7 +69,7 @@ Die lokale SQLite-Datei unter `data/` ist bewusst nicht Bestandteil von Git.
 
 ## Datenhaltung und Rechennachweis
 
-`project_store.py` verwaltet versionierte Projektsnapshots in einer lokalen
+`services/project_store.py` verwaltet versionierte Projektsnapshots in einer lokalen
 SQLite-Datenbank. Die API bietet:
 
 ```text
@@ -488,7 +488,7 @@ Elektrische Triebwerke verbrauchen Treibstoff ueber:
 
 $$ \dot m = \frac{F}{I_{sp}g_0} $$
 
-Die Implementierung steht in `propulsion.py`.
+Die Implementierung steht in `models/propulsion.py`.
 
 Grenzwert- und Singularitaetsbetrachtung:
 
@@ -608,8 +608,8 @@ $$ y(H) = a_h\sqrt{e_h^2-1}\sinh H $$
 
 $$ t(H) = \sqrt{\frac{a_h^3}{\mu_p}}\left(e_h\sinh H-H\right) $$
 
-Die Routinen liegen in `route_planner.py`; Details und Audit-Regeln stehen in
-`CALCULATION_METHODS.md`.
+Die Routinen liegen in `planner/route_planner.py`; Details und Audit-Regeln
+stehen in `docs/CALCULATION_METHODS.md`.
 
 ### Eintrittskorridor auf der planetaren SOI
 
@@ -846,11 +846,9 @@ http://127.0.0.1:5001
 
 ## Screenshots / Visuals
 
-Lege bei Bedarf Bilder in `screenshots/` ab und binde sie mit Markdown ein:
-
-```md
-![Alt-Text](screenshots/datei.png)
-```
+Zusaetzliche Screenshots koennen bei Bedarf unter `screenshots/` abgelegt
+werden. Das technische Referenzbild ist
+[solar-oberth-model.png](docs/assets/solar-oberth-model.png).
 
 Die technisch gesetzten Formeln der README liegen als SVG in
 `docs/assets/formulas/`. Die Solar-Oberth-Beispielgrafik liegt in
@@ -886,7 +884,8 @@ SPICE-Zielkörper.
 
 - Standard-Port: `5001`.
 - Zentrale Parameter liegen im jeweiligen Modul, insbesondere in `main.py`,
-  `trajectory.py`, `propulsion.py` und `web/src/missionSimulation.ts`.
+  `solver/trajectory.py`, `models/propulsion.py` und
+  `web/src/missionSimulation.ts`.
 - Unterstuetzte Kernabhaengigkeiten: `Flask`, `SciPy`, `Matplotlib`,
   `SpiceyPy`.
 
@@ -934,7 +933,10 @@ verweisen.
 
 ## Weiterfuehrende Dokumentation
 
-- `CALCULATION_METHODS.md` beschreibt die Nachweisfuehrung der
-  Routenberechnung.
-- `docs/assets/solar-oberth-model.png` zeigt das technische Beispielmodell fuer
-  den Sundiver-/Solar-Oberth-Abschnitt.
+- [`docs/README.md`](docs/README.md) ist der zentrale Dokumentationsindex.
+- [`docs/CALCULATION_METHODS.md`](docs/CALCULATION_METHODS.md) beschreibt die
+  Nachweisfuehrung der Routenberechnung.
+- [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md) dokumentiert Pakete
+  und Abhaengigkeitsrichtung.
+- [`docs/assets/solar-oberth-model.png`](docs/assets/solar-oberth-model.png)
+  zeigt das technische Beispielmodell fuer den Sundiver-/Solar-Oberth-Abschnitt.

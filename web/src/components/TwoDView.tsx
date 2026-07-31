@@ -30,6 +30,11 @@ import {
 import type { MissionConfig, MoonCatalogue, SolarSystemData } from '../types'
 import type { WaypointRouteResult } from './PlannedWaypointRoute'
 import { PlanetCorridorPlanner } from './PlanetCorridorPlanner'
+import {
+  RouteCalculationDialog,
+  type RouteCalculationCandidateTrace,
+  type RouteCalculationTrace,
+} from './RouteCalculationDialog'
 import { RouteSectionList } from './RouteSectionList'
 import { TwoDPlanetDetails } from './TwoDPlanetDetails'
 
@@ -155,6 +160,18 @@ const AI_CHAT_SUGGESTIONS = [
   'Wie verbessere ich diese Route?',
   'Erklaere mir die aktuelle Ansicht.',
 ]
+
+function downsampleRoutePoints(trajectory: WaypointRouteResult['trajectory']) {
+  const limit = 320
+  if (trajectory.length <= limit) return trajectory.map((point) => point.positionKm)
+  const stride = Math.ceil(trajectory.length / limit)
+  const points = trajectory
+    .filter((_, index) => index % stride === 0)
+    .map((point) => point.positionKm)
+  const lastPoint = trajectory.at(-1)?.positionKm
+  if (lastPoint && points.at(-1) !== lastPoint) points.push(lastPoint)
+  return points
+}
 
 function missionDateAfterDays(startDate: string, elapsedDays: number) {
   return new Date(new Date(`${startDate}T00:00:00Z`).getTime() + elapsedDays * 86_400_000).toISOString().slice(0, 10)
@@ -424,6 +441,8 @@ export function TwoDView({
   const [constellationSearchRunning, setConstellationSearchRunning] = useState(false)
   const [constellationResults, setConstellationResults] = useState<ConstellationSearchResult[]>([])
   const [selectedConstellationResultId, setSelectedConstellationResultId] = useState('')
+  const [routeCalculationTrace, setRouteCalculationTrace] = useState<RouteCalculationTrace | null>(null)
+  const [routeCalculationDialogOpen, setRouteCalculationDialogOpen] = useState(false)
   const [aiChatInput, setAiChatInput] = useState('')
   const [aiChatLoading, setAiChatLoading] = useState(false)
   const [aiChatError, setAiChatError] = useState('')
@@ -1152,6 +1171,9 @@ export function TwoDView({
       broadStepDays,
       longestRelevantPeriodDays,
     } = constellationSearchWindow(involvedPlanetPeriods)
+    const geometricShortlistLimit = 8
+    const preflightSolverBudget = 22
+    const fullValidationBudget = 5
     const candidates: Array<{
       timestamp: number
       score: number
@@ -1183,6 +1205,41 @@ export function TwoDView({
       return candidate
     }
     const searchRunId = crypto.randomUUID()
+    const routeLabel = routeSections
+      .map((section) => `${section.originId} → ${section.targetId}`)
+      .join(' · ')
+    setRouteCalculationTrace({
+      runId: searchRunId,
+      routeLabel,
+      running: true,
+      baseDate: dateFromTimestamp(base),
+      searchStartDate: dateFromTimestamp(base + searchStartDay * 86_400_000),
+      searchEndDate: dateFromTimestamp(base + searchEndDay * 86_400_000),
+      broadStepDays,
+      graphNodes: 0,
+      graphEdges: 0,
+      geometricShortlist: 0,
+      preflightBudget: preflightSolverBudget,
+      fullValidationBudget,
+      candidates: [],
+      resultCount: 0,
+      flightReadyCount: 0,
+    })
+    setRouteCalculationDialogOpen(true)
+    const updateCalculationCandidate = (candidateTrace: RouteCalculationCandidateTrace) => {
+      setRouteCalculationTrace((current) => {
+        if (!current || current.runId !== searchRunId) return current
+        const exists = current.candidates.some((candidate) => candidate.id === candidateTrace.id)
+        return {
+          ...current,
+          candidates: exists
+            ? current.candidates.map((candidate) => (
+                candidate.id === candidateTrace.id ? candidateTrace : candidate
+              ))
+            : [...current.candidates, candidateTrace],
+        }
+      })
+    }
     logActivity({
       category: 'calculation',
       action: 'constellation-search-started',
@@ -1211,16 +1268,28 @@ export function TwoDView({
       const candidateGraph = buildTemporalCandidateGraph(candidates)
       const geometricShortlist = selectDiverseGraphCandidates(
         candidateGraph,
-        8,
+        geometricShortlistLimit,
         Math.max(90, Math.min(730, longestRelevantPeriodDays / 8)),
       )
+      const graphEdges = [...candidateGraph.neighbors.values()]
+        .reduce((sum, edges) => sum + edges.length, 0) / 2
+      setRouteCalculationTrace((current) => (
+        current?.runId === searchRunId
+          ? {
+              ...current,
+              graphNodes: candidateGraph.nodes.length,
+              graphEdges,
+              geometricShortlist: geometricShortlist.length,
+            }
+          : current
+      ))
       logActivity({
         category: 'calculation',
         action: 'constellation-graph-built',
         status: 'success',
         values: {
           nodes: candidateGraph.nodes.length,
-          edges: [...candidateGraph.neighbors.values()].reduce((sum, edges) => sum + edges.length, 0) / 2,
+          edges: graphEdges,
           shortlistNodes: geometricShortlist.length,
           searchStartDate: dateFromTimestamp(base + searchStartDay * 86_400_000),
           searchEndDate: dateFromTimestamp(base + searchEndDay * 86_400_000),
@@ -1254,6 +1323,17 @@ export function TwoDView({
         iteration: number,
       ): Promise<SolvedCandidate | null> => {
         const startDate = dateFromTimestamp(candidate.timestamp)
+        const candidateTraceId = `${searchRunId}:${iteration}`
+        const runningTrace: RouteCalculationCandidateTrace = {
+          id: candidateTraceId,
+          iteration,
+          date: startDate,
+          stage,
+          fullCorridorCheck,
+          status: 'running',
+          geometricScore: candidate.score,
+        }
+        updateCalculationCandidate(runningTrace)
         const selectedSections = (
           candidate.sections[0]?.targetId === 'sun'
           && candidate.sections[1]?.originId === 'sun'
@@ -1282,6 +1362,11 @@ export function TwoDView({
         if (!response.ok || 'error' in payload) {
           const message = 'error' in payload && payload.error ? payload.error : `HTTP ${response.status}`
           const structural = /keine lokale Ephemeride|benötigt zuerst|kann nur der letzte|Mindestens ein 2D-Routenabschnitt|Endpunkt/.test(message)
+          updateCalculationCandidate({
+            ...runningTrace,
+            status: structural ? 'error' : 'rejected',
+            message,
+          })
           logActivity({
             category: 'calculation',
             action: 'constellation-candidate',
@@ -1366,6 +1451,21 @@ export function TwoDView({
             targetAlignmentDeg,
           },
         })
+        updateCalculationCandidate({
+          ...runningTrace,
+          status: route.summary.feasibleWithConfiguredBurn ? 'success' : 'rejected',
+          quality,
+          feasible: route.summary.feasibleWithConfiguredBurn,
+          corridorSatisfied,
+          collisionFree,
+          requiredInjectionDeltaVKmS,
+          availableInjectionDeltaVKmS,
+          targetCorrectionDeltaVKmS,
+          corridorInsertionDeficitKmS,
+          targetAlignmentDeg,
+          totalFlightDays: route.totalFlightDays,
+          routePoints: downsampleRoutePoints(route.trajectory),
+        })
         return {
           candidate,
           route,
@@ -1399,7 +1499,6 @@ export function TwoDView({
         Math.max(180, Math.min(730, longestRelevantPeriodDays / 10)),
       )
       const refinementFrontier = refinementSeeds.map((solved) => ({ solved, level: 0 }))
-      const preflightSolverBudget = 22
       while (refinementFrontier.length > 0 && solverIteration < preflightSolverBudget) {
         const parent = refinementFrontier.shift()
         if (!parent || parent.level >= 4) continue
@@ -1448,7 +1547,7 @@ export function TwoDView({
       const fullValidationSeeds = selectTemporallyDiverseCandidates(
         rankedPreflightCandidates,
         (candidate) => candidate.candidate.timestamp,
-        5,
+        fullValidationBudget,
         fullValidationBasinSeparationDays,
       )
       const fullValidationShortlist = fullValidationSeeds
@@ -1550,6 +1649,16 @@ export function TwoDView({
       ))
       if (!best || !bestResult) {
         setConstellationSearchStatus('Der Solver konnte keinen Kandidaten propagieren. Route und Eingaben bleiben erhalten.')
+        setRouteCalculationTrace((current) => (
+          current?.runId === searchRunId
+            ? {
+                ...current,
+                resultCount: solvedCandidates.length,
+                flightReadyCount: 0,
+                error: 'Kein Kandidat konnte bis zur Korridor-Vollprüfung propagiert werden.',
+              }
+            : current
+        ))
         logActivity({
           category: 'calculation',
           action: 'constellation-search-completed',
@@ -1603,9 +1712,22 @@ export function TwoDView({
           flightReadyResultCount: rankedResults.filter((result) => result.flightReady).length,
         },
       })
+      setRouteCalculationTrace((current) => (
+        current?.runId === searchRunId
+          ? {
+              ...current,
+              bestDate,
+              resultCount: rankedResults.length,
+              flightReadyCount: rankedResults.filter((result) => result.flightReady).length,
+            }
+          : current
+      ))
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Konstellationssuche fehlgeschlagen.'
       setConstellationSearchStatus(message)
+      setRouteCalculationTrace((current) => (
+        current?.runId === searchRunId ? { ...current, error: message } : current
+      ))
       logActivity({
         category: 'calculation',
         action: 'constellation-search-failed',
@@ -1616,6 +1738,9 @@ export function TwoDView({
     } finally {
       searchRunningRef.current = false
       setConstellationSearchRunning(false)
+      setRouteCalculationTrace((current) => (
+        current?.runId === searchRunId ? { ...current, running: false } : current
+      ))
     }
   }
 
@@ -1953,6 +2078,17 @@ export function TwoDView({
         >
           {constellationSearchRunning ? 'Konstellationen werden geprüft …' : 'Beste mögliche Konstellation'}
         </button>
+        {routeCalculationTrace
+          ? (
+            <button
+              type="button"
+              className="route-calculation-open-button"
+              onClick={() => setRouteCalculationDialogOpen(true)}
+            >
+              Analyse · {routeCalculationTrace.candidates.length}
+            </button>
+          )
+          : null}
         {constellationResults.length > 0 && (
           <label className="constellation-result-select">
             <span>Ergebnis</span>
@@ -2236,6 +2372,14 @@ export function TwoDView({
           onApply={(intent) => applyRouteIntent(previewSection.id, intent)}
         />
       )}
+      {routeCalculationDialogOpen && routeCalculationTrace
+        ? (
+          <RouteCalculationDialog
+            trace={routeCalculationTrace}
+            onClose={() => setRouteCalculationDialogOpen(false)}
+          />
+        )
+        : null}
     </section>
   )
 }

@@ -1,5 +1,9 @@
 # Nachweisführung der Planeten- und Missionsbahnberechnung
 
+Zurueck zum [Dokumentationsindex](README.md). Die Implementierungsuebersicht
+steht in [Planner](README_PLANNER.md), [Solver](README_SOLVER.md) und
+[Services](README_SERVICES.md).
+
 ## 1. Zweck und Nachweisstrategie
 
 Dieses Dokument beschreibt die Rechenkette der Wegpunktroute so, dass jeder
@@ -13,6 +17,11 @@ Die Berechnung ist in vier physikalische Segmente getrennt:
 2. heliozentrischer Lambert-Transfer bis zur Einflusssphäre des Wegpunktes,
 3. planetenzentrierte hyperbolische Swing-by-Bahn,
 4. heliozentrischer Ausflug und asymptotischer Zielkurs.
+
+Die zentrale Implementierung liegt in `planner/route_planner.py`,
+`planner/generic_route_planner.py`, `planner/multi_route_planner.py`,
+`solver/trajectory.py` und `solver/nbody_propagation.py`. Auditdatensaetze
+werden durch `services/calculation_audit.py` geschrieben.
 
 Benachbarte Segmente müssen denselben kartesischen Grenzpunkt besitzen. Eine
 gewollte Geschwindigkeitsänderung wird als Manöver protokolliert und darf nicht

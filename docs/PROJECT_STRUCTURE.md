@@ -1,5 +1,7 @@
 # Projektstruktur
 
+Zurueck zum [Dokumentationsindex](README.md).
+
 Der Python-Backendcode ist nach Verantwortlichkeiten gegliedert:
 
 | Verzeichnis | Verantwortung |
@@ -14,18 +16,31 @@ Der Python-Backendcode ist nach Verantwortlichkeiten gegliedert:
 | `tests/` | Automatisierte Python-Tests |
 | `scripts/` | Wartungs- und Auswertungsskripte |
 
+Bereichsdokumentation:
+
+- [Planner](README_PLANNER.md)
+- [Solver](README_SOLVER.md)
+- [Models](README_MODELS.md)
+- [Services](README_SERVICES.md)
+- [Visualization](README_VISUALIZATION.md)
+- [AI](README_AI.md)
+- [Web](README_WEB.md)
+- [Tests](README_TESTS.md)
+- [Scripts](README_SCRIPTS.md)
+
 `main.py` bleibt der Einstiegspunkt des Flask-Backends. Die früheren
 Top-Level-Modulnamen bestehen als Kompatibilitäts-Aliase weiter, damit externe
 Aufrufer nicht unmittelbar migriert werden müssen. Neuer Code soll die
 qualifizierten Importpfade wie `planner.route_planner` oder
 `solver.trajectory` verwenden.
 
-Die beabsichtigte Abhängigkeitsrichtung lautet:
+Die beabsichtigte Abhaengigkeitsrichtung lautet:
 
 ```text
-models -> visualization -> solver -> planner
-                         services -> planner
-                                  -> main
+models ───────> visualization ───────> solver ───────> planner
+                       services ─────────────────────> planner
+ai ─────────────────────────────────────────────────> main
+web <──────────────────────────── HTTP/JSON ─────────> main
 ```
 
 `data/`, `logs/`, `kernels/` und `web/public/` werden weiterhin relativ zum

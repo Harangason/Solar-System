@@ -1,5 +1,7 @@
 # Planet texture sources
 
+Project context: [Visualization documentation](../../../../docs/README_VISUALIZATION.md).
+
 The eight local JPEG textures in this directory were downloaded from the
 NASA/JPL Solar System Simulator texture-map database:
 
@@ -18,3 +20,6 @@ The JPL catalogue notes that several rocky-body maps are spacecraft mosaics.
 The gas-giant maps are representative visual textures because their visible
 atmospheres change over time. These assets are visualisation material and are
 not used for scientific surface analysis.
+
+The files are presentation assets only. Orbital positions, radii, encounter
+geometry, and solver results are computed independently of these textures.
