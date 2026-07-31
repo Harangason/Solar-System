@@ -290,12 +290,28 @@ def _transfer_seconds(
     gravitational_parameter: float,
     *,
     local: bool,
+    reference_speed_km_s: float | None = None,
 ) -> float:
     start_radius = max(_magnitude(start), 1.0)
     end_radius = max(_magnitude(end), 1.0)
     hohmann = pi * sqrt(((start_radius + end_radius) / 2) ** 3 / gravitational_parameter)
     minimum = 0.2 * DAY_SECONDS if local else 20 * DAY_SECONDS
     maximum = 120 * DAY_SECONDS if local else 20 * 365.25 * DAY_SECONDS
+    if reference_speed_km_s is not None and reference_speed_km_s > 0:
+        specific_energy = (
+            reference_speed_km_s**2 / 2
+            - gravitational_parameter / start_radius
+        )
+        if specific_energy > 0:
+            # A post-Oberth or gravity-assist departure is hyperbolic.  A
+            # Hohmann half-period then overestimates the flight time by years
+            # and makes the following Lambert leg invent a huge braking burn.
+            # The asymptotic speed supplies the appropriate first-order time
+            # scale; Lambert still performs the actual endpoint solution.
+            asymptotic_speed = sqrt(2 * specific_energy)
+            chord_distance = _magnitude(_subtract(end, start))
+            hyperbolic = chord_distance / max(asymptotic_speed, 1e-6)
+            return max(minimum, min(maximum, hyperbolic))
     return max(minimum, min(maximum, hohmann))
 
 
@@ -385,8 +401,11 @@ def _targeted_interstellar_passage_angle_deg(
     requested_angle = float(passage["orbitAngleDeg"])
     minimum_angle = 360.0 if passage["mode"] == "full-orbit" else requested_angle
     candidates: list[dict] = []
-    for step in range(721):
-        selected_angle = minimum_angle + step * 0.5
+    # At solar-perihelion speeds even half a degree can imply several km/s of
+    # artificial terminal correction.  Resolve the exit phase finely enough
+    # that a genuinely target-coupled passage can remain passive.
+    for step in range(7201):
+        selected_angle = minimum_angle + step * 0.05
         duration_seconds = (
             selected_angle * pi / 180 * entry_radius / passage_speed
             if passage_speed > 0
@@ -438,11 +457,273 @@ def _targeted_interstellar_passage_angle_deg(
     }
 
 
+def _targeted_body_passage_angle_deg(
+    *,
+    passage: dict,
+    target: RouteBody,
+    lookahead_target: RouteBody,
+    lookahead_entry_direction: tuple | None,
+    lookahead_entry_radius: float,
+    catalog: dict[str, RouteBody],
+    epoch_days: float,
+    entry_day: float,
+    entry_radius: float,
+    passage_speed: float,
+    entry_direction: tuple,
+    normal: tuple,
+    direction_sign: float,
+) -> tuple[float, dict]:
+    """Match a passive passage exit to the next body's Lambert departure."""
+    requested_angle = float(passage["orbitAngleDeg"])
+    minimum_angle = 360.0 if passage["mode"] == "full-orbit" else requested_angle
+
+    def assess(selected_angle: float, passage_normal: tuple = normal) -> dict | None:
+        passage_seconds = selected_angle * pi / 180 * entry_radius / passage_speed
+        exit_day = entry_day + passage_seconds / DAY_SECONDS
+        target_position, target_velocity = _body_state(
+            target, epoch_days + exit_day, catalog
+        )
+        radial = _normalize(_rotate_vector(
+            entry_direction,
+            passage_normal,
+            direction_sign * selected_angle * pi / 180,
+        ))
+        tangent = _normalize(_cross(normal, radial))
+        if direction_sign < 0:
+            tangent = tuple(-component for component in tangent)
+        exit_position = _add(
+            target_position,
+            tuple(entry_radius * component for component in radial),
+        )
+        exit_velocity = _add(
+            target_velocity,
+            tuple(passage_speed * component for component in tangent),
+        )
+        provisional_position, _ = _body_state(
+            lookahead_target, epoch_days + exit_day, catalog
+        )
+        provisional_seconds = _transfer_seconds(
+            exit_position,
+            provisional_position,
+            MU_SUN,
+            local=False,
+            reference_speed_km_s=_magnitude(exit_velocity),
+        )
+        provisional_position, _ = _body_state(
+            lookahead_target,
+            epoch_days + exit_day + provisional_seconds / DAY_SECONDS,
+            catalog,
+        )
+        endpoint_direction = lookahead_entry_direction
+        if endpoint_direction is None:
+            endpoint_direction = _normalize(_subtract(
+                exit_position, provisional_position
+            ))
+        provisional_endpoint = _add(
+            provisional_position,
+            tuple(
+                lookahead_entry_radius * component
+                for component in endpoint_direction
+            ),
+        )
+        transfer_seconds = _transfer_seconds(
+            exit_position,
+            provisional_endpoint,
+            MU_SUN,
+            local=False,
+            reference_speed_km_s=_magnitude(exit_velocity),
+        )
+        future_position, _ = _body_state(
+            lookahead_target,
+            epoch_days + exit_day + transfer_seconds / DAY_SECONDS,
+            catalog,
+        )
+        endpoint = _add(
+            future_position,
+            tuple(
+                lookahead_entry_radius * component
+                for component in endpoint_direction
+            ),
+        )
+        try:
+            departures = _lambert_candidates(
+                exit_position, endpoint, transfer_seconds, MU_SUN
+            )
+        except ValueError:
+            return None
+        selected_departure = min(
+            departures,
+            key=lambda item: _magnitude(_subtract(
+                item["departure"], exit_velocity
+            )),
+        )
+        mismatch = _magnitude(_subtract(
+            selected_departure["departure"], exit_velocity
+        ))
+        return {
+            "angleDeg": selected_angle,
+            "mismatchKmS": mismatch,
+            "transferDays": transfer_seconds / DAY_SECONDS,
+            "exitDirection": radial,
+            "exitVelocity": exit_velocity,
+            "requiredDepartureVelocity": selected_departure["departure"],
+            "futureTargetPosition": future_position,
+            "targetVelocity": target_velocity,
+            "passageNormal": passage_normal,
+        }
+
+    # Three bounded passes provide sub-0.01 degree phase resolution without
+    # multiplying the full adaptive search by a dense 360-degree grid.
+    candidates = [
+        item for item in (
+            assess(minimum_angle + step * 5.0) for step in range(73)
+        ) if item is not None
+    ]
+    if not candidates:
+        raise ValueError("Keine planetare Lambert-Kopplung gefunden.")
+    selected = min(candidates, key=lambda item: item["mismatchKmS"])
+    for half_width, step_size in ((5.0, 0.1), (0.1, 0.005)):
+        start = max(minimum_angle, selected["angleDeg"] - half_width)
+        count = int(2 * half_width / step_size) + 1
+        refined = [
+            item for item in (
+                assess(start + step * step_size) for step in range(count)
+                if start + step * step_size <= minimum_angle + 360.0 + 1e-9
+            ) if item is not None
+        ]
+        if refined:
+            selected = min(refined, key=lambda item: item["mismatchKmS"])
+    # A scalar phase scan cannot remove an out-of-plane Lambert mismatch.
+    # Reconstruct the passage plane from the required passive departure and
+    # iterate because that plane in turn moves the finite-radius exit point.
+    best_selected = selected
+    current_selected = selected
+    plane_coupling_iterations = []
+    for _ in range(12):
+        desired_tangent = _normalize(_subtract(
+            current_selected["requiredDepartureVelocity"],
+            current_selected["targetVelocity"],
+        ))
+        signed_tangent = tuple(
+            direction_sign * component for component in desired_tangent
+        )
+        candidate_normal = _cross(entry_direction, signed_tangent)
+        if _magnitude(candidate_normal) < 1e-9:
+            break
+        candidate_normal = _normalize(candidate_normal)
+        desired_radial = _normalize(_cross(signed_tangent, candidate_normal))
+        signed_angle = atan2(
+            _dot(candidate_normal, _cross(entry_direction, desired_radial)),
+            _dot(entry_direction, desired_radial),
+        ) * 180 / pi
+        directed_angle = (signed_angle / direction_sign) % 360.0
+        candidate_angle = directed_angle
+        while candidate_angle + 1e-9 < minimum_angle:
+            candidate_angle += 360.0
+        if candidate_angle > minimum_angle + 360.0 + 1e-9:
+            break
+        candidate = assess(candidate_angle, candidate_normal)
+        if candidate is None:
+            break
+        plane_coupling_iterations.append({
+            "angleDeg": candidate_angle,
+            "mismatchKmS": candidate["mismatchKmS"],
+            "normal": list(candidate_normal),
+        })
+        if candidate["mismatchKmS"] < best_selected["mismatchKmS"]:
+            best_selected = candidate
+        next_tangent = _normalize(_subtract(
+            candidate["requiredDepartureVelocity"], candidate["targetVelocity"]
+        ))
+        current_selected = candidate
+        if _angle_deg(next_tangent, desired_tangent) < 0.001:
+            break
+    selected = best_selected
+    # Finish with a bounded two-dimensional coordinate search.  Plane and
+    # phase are coupled, so refining only one of them can settle on a large
+    # artificial burn even though a passive branch exists nearby.
+    for normal_step, angle_step in (
+        (30.0, 20.0),
+        (10.0, 5.0),
+        (2.0, 1.0),
+        (0.5, 0.2),
+        (0.1, 0.05),
+        (0.02, 0.01),
+    ):
+        coupled_candidates = []
+        for normal_offset in range(-2, 3):
+            candidate_normal = _normalize(_rotate_vector(
+                selected["passageNormal"],
+                entry_direction,
+                normal_offset * normal_step * pi / 180,
+            ))
+            for angle_offset in range(-2, 3):
+                candidate_angle = selected["angleDeg"] + angle_offset * angle_step
+                if not (
+                    minimum_angle - 1e-9
+                    <= candidate_angle
+                    <= minimum_angle + 360.0 + 1e-9
+                ):
+                    continue
+                candidate = assess(candidate_angle, candidate_normal)
+                if candidate is not None:
+                    coupled_candidates.append(candidate)
+        if coupled_candidates:
+            selected = min(
+                [selected, *coupled_candidates],
+                key=lambda item: item["mismatchKmS"],
+            )
+    best_normal = selected["passageNormal"]
+    local_start = max(minimum_angle, selected["angleDeg"] - 0.2)
+    local_refined = [
+        item for item in (
+            assess(local_start + step * 0.005, best_normal)
+            for step in range(81)
+            if local_start + step * 0.005 <= minimum_angle + 360.0 + 1e-9
+        ) if item is not None
+    ]
+    if local_refined:
+        selected = min(
+            [selected, *local_refined],
+            key=lambda item: item["mismatchKmS"],
+        )
+    desired_direction = _normalize(_subtract(
+        selected["futureTargetPosition"],
+        tuple(0.0 for _ in range(3)),
+    ))
+    return selected["angleDeg"], {
+        "method": "passive exit to next-body Lambert velocity coupling",
+        "lookaheadTargetId": lookahead_target.id,
+        "requestedAngleDeg": requested_angle,
+        "selectedAngleDeg": selected["angleDeg"],
+        "autoExtendedAngleDeg": max(0.0, selected["angleDeg"] - requested_angle),
+        "transferPreviewDays": selected["transferDays"],
+        "desiredExitDirection": list(desired_direction),
+        "desiredExitRadialDirection": list(selected["exitDirection"]),
+        "predictedHeliocentricExitDirection": list(_normalize(
+            selected["exitVelocity"]
+        )),
+        "predictedTransitionDeltaVKmS": selected["mismatchKmS"],
+        "requiredDepartureVelocityKmS": list(
+            selected["requiredDepartureVelocity"]
+        ),
+        "optimizedPassageNormal": list(selected["passageNormal"]),
+        "planeCouplingIterations": plane_coupling_iterations,
+        "lineOfSightClear": True,
+        "bestApproximation": selected["mismatchKmS"] > 0.5,
+        "requiresCurvedTransfer": True,
+        "keepOutRadiusKm": entry_radius,
+        "departureClearanceKm": entry_radius - target.radius_km,
+    }
+
+
 def _targeted_passage_angle_deg(
     *,
     passage: dict,
     target: RouteBody,
     lookahead_target: RouteBody | None,
+    lookahead_entry_direction: tuple | None,
+    lookahead_entry_radius: float,
     lookahead_interstellar_target_id: str | None,
     catalog: dict[str, RouteBody],
     epoch_days: float,
@@ -452,6 +733,7 @@ def _targeted_passage_angle_deg(
     entry_direction: tuple,
     normal: tuple,
     direction_sign: float,
+    optimize_transfer_velocity: bool,
 ) -> tuple[float, dict | None]:
     if passage["mode"] == "direct":
         return passage["orbitAngleDeg"], None
@@ -474,13 +756,30 @@ def _targeted_passage_angle_deg(
     if lookahead_target is None:
         return passage["orbitAngleDeg"], None
 
+    if optimize_transfer_velocity:
+        return _targeted_body_passage_angle_deg(
+            passage=passage,
+            target=target,
+            lookahead_target=lookahead_target,
+            lookahead_entry_direction=lookahead_entry_direction,
+            lookahead_entry_radius=lookahead_entry_radius,
+            catalog=catalog,
+            epoch_days=epoch_days,
+            entry_day=entry_day,
+            entry_radius=entry_radius,
+            passage_speed=passage_speed,
+            entry_direction=entry_direction,
+            normal=normal,
+            direction_sign=direction_sign,
+        )
+
     requested_angle = float(passage["orbitAngleDeg"])
     requested_duration_days = (
         abs(requested_angle) * pi / 180 * entry_radius / passage_speed / DAY_SECONDS
         if passage_speed > 0
         else 0.0
     )
-    target_position, _ = _body_state(
+    target_position, target_velocity = _body_state(
         target,
         epoch_days + entry_day + requested_duration_days,
         catalog,
@@ -490,11 +789,28 @@ def _targeted_passage_angle_deg(
         epoch_days + entry_day + requested_duration_days,
         catalog,
     )
-    transfer_seconds = _transfer_seconds(
+    requested_radial = _normalize(_rotate_vector(
+        entry_direction,
+        normal,
+        direction_sign * requested_angle * pi / 180,
+    ))
+    requested_tangent = _normalize(_cross(normal, requested_radial))
+    if direction_sign < 0:
+        requested_tangent = tuple(-component for component in requested_tangent)
+    preview_departure_position = _add(
         target_position,
+        tuple(entry_radius * component for component in requested_radial),
+    )
+    preview_departure_velocity = _add(
+        target_velocity,
+        tuple(passage_speed * component for component in requested_tangent),
+    )
+    transfer_seconds = _transfer_seconds(
+        preview_departure_position,
         lookahead_position,
         MU_SUN,
         local=False,
+        reference_speed_km_s=_magnitude(preview_departure_velocity),
     )
     future_day = entry_day + requested_duration_days + transfer_seconds / DAY_SECONDS
     target_position, _ = _body_state(target, epoch_days + future_day, catalog)
@@ -523,11 +839,34 @@ def _targeted_passage_angle_deg(
         }
     projected_direction = _normalize(projected_target)
     has_external_tangency = projected_distance > entry_radius + 1e-6
-    tangency_offset = (
-        acos(max(-1.0, min(1.0, entry_radius / projected_distance)))
-        if has_external_tangency
-        else pi / 2
+    target_mu = target.mass_kg * G_KM3_KG_S2
+    conic_eccentricity = (
+        entry_radius * passage_speed**2 / target_mu - 1.0
+        if target_mu > 0
+        else 0.0
     )
+    uses_hyperbolic_conic = (
+        target.kind == "sun"
+        and conic_eccentricity > 1.0
+        and has_external_tangency
+    )
+    if uses_hyperbolic_conic:
+        # At solar perihelion the departure velocity is tangential, but the
+        # Sun keeps bending the outbound hyperbola long after the local arc.
+        # Use the conic true anomaly at the future target radius instead of a
+        # straight 90-degree tangent, otherwise Lambert has to invent that
+        # entire passive turn as a powered plane change.
+        semi_latus_rectum = entry_radius * (1.0 + conic_eccentricity)
+        conic_cosine = (
+            semi_latus_rectum / projected_distance - 1.0
+        ) / conic_eccentricity
+        tangency_offset = acos(max(-1.0, min(1.0, conic_cosine)))
+    else:
+        tangency_offset = (
+            acos(max(-1.0, min(1.0, entry_radius / projected_distance)))
+            if has_external_tangency
+            else pi / 2
+        )
     desired_exit_radial = _normalize(_rotate_vector(
         projected_direction,
         normal,
@@ -548,7 +887,9 @@ def _targeted_passage_angle_deg(
     departure_clearance = entry_radius - target.radius_km
     return selected_angle, {
         "method": (
-            "future target tangency with minimum passage"
+            "future target hyperbolic conic with minimum passage"
+            if uses_hyperbolic_conic
+            else "future target tangency with minimum passage"
             if has_external_tangency
             else "best tangential departure for curved internal transfer"
         ),
@@ -557,6 +898,9 @@ def _targeted_passage_angle_deg(
         "selectedAngleDeg": selected_angle,
         "autoExtendedAngleDeg": max(0.0, selected_angle - requested_angle),
         "transferPreviewDays": transfer_seconds / DAY_SECONDS,
+        "departureConicEccentricity": conic_eccentricity,
+        "departureConicTrueAnomalyDeg": tangency_offset * 180 / pi,
+        "usesHyperbolicDepartureConic": uses_hyperbolic_conic,
         "desiredExitDirection": list(projected_direction),
         "desiredExitRadialDirection": list(desired_exit_radial),
         "lineOfSightClear": has_external_tangency,
@@ -574,6 +918,8 @@ def _local_passage(
     section: dict,
     target: RouteBody,
     lookahead_target: RouteBody | None,
+    lookahead_entry_direction: tuple | None,
+    lookahead_entry_radius: float,
     lookahead_interstellar_target_id: str | None,
     catalog: dict[str, RouteBody],
     epoch_days: float,
@@ -582,6 +928,7 @@ def _local_passage(
     entry_radius: float,
     entry_position: tuple,
     arrival_velocity: tuple,
+    configured_oberth_delta_v_km_s: float = 0.0,
     geometry_only: bool = False,
 ) -> dict:
     passage = section["passage"]
@@ -604,6 +951,30 @@ def _local_passage(
     incoming_relative_velocity = _subtract(arrival_velocity, target_velocity)
     incoming_speed = max(_magnitude(incoming_relative_velocity), 1e-6)
     _, normal = _passage_basis(entry_direction, incoming_relative_velocity)
+    desired_lookahead_direction = (
+        interstellar_direction(lookahead_interstellar_target_id)
+        if lookahead_interstellar_target_id is not None
+        else None
+    )
+    if desired_lookahead_direction is None and lookahead_target is not None:
+        lookahead_position, _ = _body_state(
+            lookahead_target,
+            epoch_days + entry_day,
+            catalog,
+        )
+        relative_lookahead = _subtract(lookahead_position, target_position)
+        if _magnitude(relative_lookahead) > 1e-9:
+            desired_lookahead_direction = _normalize(relative_lookahead)
+    target_coupled_plane = False
+    if desired_lookahead_direction is not None:
+        coupled_normal = _cross(entry_direction, desired_lookahead_direction)
+        if _magnitude(coupled_normal) > 1e-9:
+            # The selected 3D corridor defines one vector in the passage
+            # plane; the following stellar direction defines the other.  The
+            # same target-coupled construction is valid at the Sun, planets,
+            # and moons instead of trapping planetary assists in the ecliptic.
+            normal = _normalize(coupled_normal)
+            target_coupled_plane = True
     direction_sign = 1.0 if passage["orbitDirection"] == "prograde" else -1.0
     target_mu = target.mass_kg * G_KM3_KG_S2
     circular_speed = sqrt(target_mu / entry_radius) if target_mu > 0 else incoming_speed
@@ -618,26 +989,50 @@ def _local_passage(
             incoming_speed + section["deltaVPlusKmS"],
         ),
     )
+    applied_oberth_delta_v = (
+        max(0.0, configured_oberth_delta_v_km_s)
+        if target.kind == "sun"
+        else 0.0
+    )
+    outbound_passage_speed = passage_speed + applied_oberth_delta_v
     selected_angle_deg, exit_angle_selection = _targeted_passage_angle_deg(
         passage=passage,
         target=target,
         lookahead_target=lookahead_target,
+        lookahead_entry_direction=lookahead_entry_direction,
+        lookahead_entry_radius=lookahead_entry_radius,
         lookahead_interstellar_target_id=lookahead_interstellar_target_id,
         catalog=catalog,
         epoch_days=epoch_days,
         entry_day=entry_day,
         entry_radius=entry_radius,
-        passage_speed=passage_speed,
+        passage_speed=outbound_passage_speed,
         entry_direction=entry_direction,
         normal=normal,
         direction_sign=direction_sign,
+        optimize_transfer_velocity=not geometry_only,
     )
+    if (
+        exit_angle_selection is not None
+        and exit_angle_selection.get("optimizedPassageNormal")
+    ):
+        normal = _normalize(tuple(
+            exit_angle_selection["optimizedPassageNormal"]
+        ))
+        target_coupled_plane = True
     orbit_angle_rad = direction_sign * selected_angle_deg * pi / 180
     entry_tangent = _normalize(_cross(normal, entry_direction))
     if direction_sign < 0:
         entry_tangent = tuple(-component for component in entry_tangent)
     desired_entry_relative_velocity = tuple(passage_speed * component for component in entry_tangent)
-    entry_delta_v = _magnitude(_subtract(desired_entry_relative_velocity, incoming_relative_velocity))
+    entry_delta_v = (
+        0.0
+        if passage["entryBehavior"] == "ballistic"
+        else _magnitude(_subtract(
+            desired_entry_relative_velocity,
+            incoming_relative_velocity,
+        ))
+    )
 
     arc_length = abs(orbit_angle_rad) * entry_radius
     duration_seconds = arc_length / passage_speed if passage_speed > 0 else 0.0
@@ -660,7 +1055,10 @@ def _local_passage(
         if direction_sign < 0:
             tangent = tuple(-component for component in tangent)
         relative_position = tuple(entry_radius * component for component in radial)
-        relative_velocity = tuple(passage_speed * component for component in tangent)
+        point_speed = passage_speed + (
+            applied_oberth_delta_v if fraction >= 0.5 else 0.0
+        )
+        relative_velocity = tuple(point_speed * component for component in tangent)
         absolute_position = _add(current_target_position, relative_position)
         absolute_velocity = _add(current_target_velocity, relative_velocity)
         radius = _magnitude(relative_position)
@@ -677,11 +1075,6 @@ def _local_passage(
 
     exit_direction = _normalize(_rotate_vector(entry_direction, normal, orbit_angle_rad))
     exit_velocity = tuple(points[-1]["velocityKmS"])
-    desired_lookahead_direction = (
-        interstellar_direction(lookahead_interstellar_target_id)
-        if lookahead_interstellar_target_id is not None
-        else None
-    )
     return {
         "trajectory": points,
         "exitDay": points[-1]["elapsedDays"],
@@ -701,6 +1094,8 @@ def _local_passage(
         ),
         "passageDurationDays": duration_seconds / DAY_SECONDS,
         "passageDeltaVKmS": entry_delta_v,
+        "appliedOberthDeltaVKmS": applied_oberth_delta_v,
+        "targetCoupledPlane": target_coupled_plane,
         "minimumRadiusKm": minimum_radius,
         "periapsisOffsetIndex": periapsis_index,
     }
@@ -756,6 +1151,34 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
 
     mission_values = dict(values.get("mission") or {})
     start_date = str(mission_values.get("startDate") or datetime.now().date().isoformat())
+    propulsion_modules = mission_values.get("propulsionModules")
+    solar_oberth_module = next(
+        (
+            module for module in propulsion_modules
+            if isinstance(module, dict) and module.get("type") == "solar_oberth"
+        ),
+        None,
+    ) if isinstance(propulsion_modules, list) else None
+    solar_oberth_enabled = (
+        bool(mission_values.get("carrierEnabled", True))
+        and bool(mission_values.get("kickStageEnabled", True))
+        and (
+            solar_oberth_module is None
+            or bool(solar_oberth_module.get("enabled", True))
+        )
+    )
+    configured_oberth_delta_v = (
+        max(0.0, float(mission_values.get("oberthDeltaVKmS", 8.0)))
+        if solar_oberth_enabled
+        else 0.0
+    )
+    sundiver_transfer_provided = (
+        len(parsed) > 0
+        and parsed[0]["origin"].id == "earth"
+        and parsed[0]["target"] is not None
+        and parsed[0]["target"].id == "sun"
+        and solar_oberth_enabled
+    )
     epoch_days = _mission_epoch_days(start_date)
     start_day = 0.0
     first_origin = parsed[0]["origin"]
@@ -913,6 +1336,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             provisional_frame_target,
             gravitational_parameter,
             local=central is not None,
+            reference_speed_km_s=_magnitude(frame_velocity),
         )
         arrival_day = start_day + provisional_duration / DAY_SECONDS
         arrival_target_position, arrival_target_velocity = _body_state(
@@ -962,6 +1386,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             frame_end,
             gravitational_parameter,
             local=central is not None,
+            reference_speed_km_s=_magnitude(frame_velocity),
         )
         arrival_day = start_day + duration_seconds / DAY_SECONDS
         arrival_target_position, arrival_target_velocity = _body_state(
@@ -1020,6 +1445,21 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             lookahead_target=(
                 parsed[index + 1]["target"] if index + 1 < len(parsed) else None
             ),
+            lookahead_entry_direction=(
+                tuple(parsed[index + 1]["corridor"]["centerDirection"])
+                if (
+                    index + 1 < len(parsed)
+                    and parsed[index + 1]["target"] is not None
+                    and parsed[index + 1]["corridor"]["enabled"]
+                )
+                else None
+            ),
+            lookahead_entry_radius=(
+                _entry_radius(parsed[index + 1]["target"], catalog)
+                if index + 1 < len(parsed)
+                and parsed[index + 1]["target"] is not None
+                else 0.0
+            ),
             lookahead_interstellar_target_id=(
                 parsed[index + 1]["interstellarTargetId"]
                 if index + 1 < len(parsed)
@@ -1032,6 +1472,9 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             entry_radius=entry_radius,
             entry_position=entry_position,
             arrival_velocity=arrival_velocity,
+            configured_oberth_delta_v_km_s=(
+                configured_oberth_delta_v if target.kind == "sun" else 0.0
+            ),
             geometry_only=geometry_only,
         )
         if passage_result["trajectory"]:
@@ -1069,6 +1512,15 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             "sphereOfInfluenceRadiusKm": entry_radius,
             "requiredTransitionDeltaVKmS": transition_delta_v,
             "requiredPassageDeltaVKmS": passage_delta_v,
+            "appliedOberthDeltaVKmS": passage_result.get(
+                "appliedOberthDeltaVKmS", 0.0
+            ),
+            "targetCoupledPassagePlane": passage_result.get(
+                "targetCoupledPlane", False
+            ),
+            "sundiverTransferProvidedByMissionModel": (
+                sundiver_transfer_provided and index == 0
+            ),
             "requiredSectionDeltaVKmS": transition_delta_v + passage_delta_v,
             "corridorInsertionDeltaVKmS": passage_delta_v,
             "entryVelocityPreserved": passage_delta_v < 1e-9,
@@ -1141,13 +1593,21 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
     )
     focus = calculated[focus_index]
     focus_definition = parsed[focus_index]
+    def required_for_configured_budget(index: int, section: dict) -> float:
+        if sundiver_transfer_provided and index == 0:
+            # The configured Sundiver mission supplies the Earth-to-Sun
+            # transfer.  Only an additional corridor insertion impulse is
+            # charged to the section's local delta-v fan.
+            return section["requiredPassageDeltaVKmS"]
+        return section["requiredSectionDeltaVKmS"]
+
     warnings = [
         (
             f"Abschnitt {index + 1} benötigt am Übergang Δv "
             f"{section['requiredSectionDeltaVKmS']:.2f} km/s."
         )
         for index, section in enumerate(calculated)
-        if section["requiredSectionDeltaVKmS"]
+        if required_for_configured_budget(index, section)
         > parsed[index]["deltaVPlusKmS"] + 1e-9
     ]
     warnings.extend(
@@ -1172,7 +1632,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             f"(Minimum {minimum_solar_radius_km:.0f} km)."
         )
     feasible_with_configured_burn = all(
-        section["requiredSectionDeltaVKmS"]
+        required_for_configured_budget(index, section)
         <= parsed[index]["deltaVPlusKmS"] + 1e-9
         for index, section in enumerate(calculated)
     )
@@ -1200,6 +1660,10 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             "continuousPosition": True,
             "exitStateFeedsNextSection": True,
             "transitionImpulsesExplicit": True,
+            "sundiverTransferProvidedByMissionModel": sundiver_transfer_provided,
+            "targetCoupledSolarPassagePlane": first.get(
+                "targetCoupledPassagePlane", False
+            ),
             "coordinateConvention": "x=Breite, y=Tiefe, z=Höhe (ECLIPJ2000)",
             "referenceFramesSelectedPerSection": True,
         },
@@ -1241,11 +1705,24 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
         ),
         "summary": {
             "flybyMode": "multi-section",
-            "requiredInjectionDeltaVKmS": first["requiredTransitionDeltaVKmS"],
+            "requiredInjectionDeltaVKmS": (
+                first["requiredPassageDeltaVKmS"]
+                if sundiver_transfer_provided
+                else first["requiredTransitionDeltaVKmS"]
+            ),
             "availableInjectionDeltaVKmS": first_definition["deltaVPlusKmS"],
             "solarDepartureInjectionApplied": (
-                first["requiredTransitionDeltaVKmS"]
+                required_for_configured_budget(0, first)
                 <= first_definition["deltaVPlusKmS"] + 1e-9
+            ),
+            "sundiverTransferProvidedByMissionModel": sundiver_transfer_provided,
+            "modeledSundiverTransferDeltaVKmS": (
+                first["requiredTransitionDeltaVKmS"]
+                if sundiver_transfer_provided else 0.0
+            ),
+            "appliedOberthDeltaVKmS": first.get("appliedOberthDeltaVKmS", 0.0),
+            "targetCoupledPassagePlane": first.get(
+                "targetCoupledPassagePlane", False
             ),
             "incomingExcessSpeedKmS": 0.0,
             "turnAngleDeg": focus.get("courseChangeDeg", 0.0),
@@ -1270,10 +1747,8 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             ),
             "observationWindowHours": 0.0,
             "targetAlignmentDeg": calculated[-1].get("lookaheadAlignmentDeg", 0.0),
-            "actualTargetAlignmentDeg": (
-                0.0
-                if feasible_with_configured_burn and target_transition_section is not None
-                else calculated[-1].get("lookaheadAlignmentDeg", 0.0)
+            "actualTargetAlignmentDeg": calculated[-1].get(
+                "lookaheadAlignmentDeg", 0.0
             ),
             "feasibleWithConfiguredBurn": feasible_with_configured_burn,
             "hypotheticalInterstellarAsymptote": (
@@ -1286,7 +1761,12 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             "entryCorridorTargeted": first_definition["corridor"]["enabled"],
             "entryInsideCorridor": True,
             "warnings": warnings,
-            "model": "körperbasierte Patched-Conic-Basisroute",
+            "model": (
+                "target-coupled 3D solar-Oberth patched-conic route"
+                if sundiver_transfer_provided
+                and first.get("targetCoupledPassagePlane", False)
+                else "körperbasierte Patched-Conic-Basisroute"
+            ),
             "totalTransitionDeltaVKmS": total_delta_v,
         },
     }

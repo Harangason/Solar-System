@@ -226,6 +226,54 @@ class GenericRoutePlannerTests(unittest.TestCase):
         )
         self.assertTrue(result["summary"]["hypotheticalInterstellarAsymptote"])
 
+    def test_spatial_solar_corridor_couples_oberth_exit_to_proxima(self):
+        solar = section("earth", "sun", "spatial-solar-entry")
+        solar["deltaVPlusKmS"] = 0.5
+        solar["corridor"] = {
+            **CORRIDOR,
+            "centerDirection": [
+                0.6440544822504427,
+                0.4510366297764272,
+                0.6178671236544605,
+            ],
+        }
+        solar["passage"] = {
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 270,
+            "orbitDirection": "prograde",
+            "entryBehavior": "ballistic",
+            "exitBehavior": "ballistic",
+        }
+        proxima = section("sun", "proxima-centauri", "proxima-direction")
+        proxima["deltaVPlusKmS"] = 0.5
+
+        result = simulate_route_sections({
+            "mission": {
+                "startDate": "2026-06-22",
+                "oberthDeltaVKmS": 8.0,
+                "carrierEnabled": True,
+                "kickStageEnabled": True,
+            },
+            "waypointId": "sun",
+            "calculationStage": "geometry",
+            "routeSections": [solar, proxima],
+        })
+
+        calculated_solar = result["routeSections"][0]
+        self.assertEqual(
+            calculated_solar["entryDirection"],
+            solar["corridor"]["centerDirection"],
+        )
+        self.assertTrue(calculated_solar["targetCoupledPassagePlane"])
+        self.assertEqual(calculated_solar["appliedOberthDeltaVKmS"], 8.0)
+        self.assertAlmostEqual(result["summary"]["speedGainKmS"], 8.0)
+        self.assertLess(result["summary"]["actualTargetAlignmentDeg"], 0.05)
+        self.assertLess(result["summary"]["targetCorrectionDeltaVKmS"], 0.5)
+        self.assertTrue(result["summary"]["feasibleWithConfiguredBurn"])
+        self.assertTrue(
+            result["summary"]["sundiverTransferProvidedByMissionModel"]
+        )
+
     def test_unsafe_lambert_fallback_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Kein kollisionsfreier"):
             _candidate(

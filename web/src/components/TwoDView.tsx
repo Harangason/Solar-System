@@ -1830,89 +1830,10 @@ export function TwoDView({
         fullValidationBudget,
         fullValidationBasinSeparationDays,
       )
+      // A corridor and passage are binding mission inputs.  Preflight runs
+      // may rank dates, but must never replace the user's spatial aimpoint or
+      // requested passage before authoritative full validation.
       const fullValidationShortlist = fullValidationSeeds
-        .map((solved) => ({
-          ...solved,
-          candidate: {
-            ...solved.candidate,
-            sections: solved.candidate.sections.map((section, sectionIndex) => {
-                const solarPassage = solved.route.solarPassage
-               if (section.targetId === 'sun' && solarPassage) {
-                 return {
-                   ...section,
-                   corridor: {
-                     ...section.corridor,
-                     enabled: true,
-                     centerDirection: solarPassage.entryDirection,
-                     mainProjection: 'top' as const,
-                     blocked: false,
-                     blockReasons: [],
-                   },
-                   passage: {
-                     ...section.passage,
-                     mode: 'partial-orbit' as const,
-                     orbitAngleDeg: clamp(
-                       solarPassage.passageAngleDeg,
-                       1,
-                       MAX_PARTIAL_ORBIT_ANGLE_DEG,
-                     ),
-                     orbitDirection: solarPassage.orbitDirection,
-                     entryBehavior: 'tangential-prograde' as const,
-                     exitBehavior: 'tangential-accelerate' as const,
-                   },
-                 }
-                }
-                const calculated = solved.route.routeSections?.find((item) => item.id === section.id)
-                if (!calculated) return section
-                const centerDirection = calculated.entryDirection
-                const nextSection = solved.candidate.sections[sectionIndex + 1]
-                const needsTargetedSolarPassage = (
-                  section.targetId === 'sun'
-                  && nextSection?.originId === 'sun'
-                  && section.passage.mode === 'direct'
-                )
-                if (needsTargetedSolarPassage) {
-                  return {
-                    ...section,
-                    corridor: {
-                      ...section.corridor,
-                      enabled: true,
-                      centerDirection,
-                      mainProjection: 'top' as const,
-                      blocked: false,
-                      blockReasons: [],
-                    },
-                    passage: {
-                      ...section.passage,
-                      mode: 'partial-orbit' as const,
-                      orbitAngleDeg: 1,
-                      entryBehavior: 'tangential-prograde' as const,
-                      exitBehavior: 'tangential-prograde' as const,
-                    },
-                  }
-                }
-                const calculatedTurnDeg = calculated.predictedPassiveTurnDeg ?? 0
-               return {
-                 ...section,
-                 corridor: {
-                   ...section.corridor,
-                   enabled: true,
-                   centerDirection,
-                   mainProjection: (Math.abs(centerDirection[2]) > 0.18 ? 'side' : 'top') as EntryCorridorDefinition['mainProjection'],
-                   blocked: false,
-                   blockReasons: [],
-                 },
-                 passage: calculatedTurnDeg > 0.1 && !isInterstellarRouteObject(section.targetId)
-                   ? {
-                       ...section.passage,
-                       mode: 'partial-orbit' as const,
-                       orbitAngleDeg: clamp(calculatedTurnDeg, 1, MAX_PARTIAL_ORBIT_ANGLE_DEG),
-                     }
-                   : section.passage,
-               }
-            }),
-          },
-        }))
       const solvedCandidates: SolvedCandidate[] = []
       for (let index = 0; index < fullValidationShortlist.length; index += 1) {
         const candidate = fullValidationShortlist[index].candidate
