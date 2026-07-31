@@ -274,6 +274,54 @@ class GenericRoutePlannerTests(unittest.TestCase):
             result["summary"]["sundiverTransferProvidedByMissionModel"]
         )
 
+    def test_earth_sun_jupiter_proxima_couples_both_passage_planes(self):
+        solar = section("earth", "sun", "earth-sun")
+        solar["deltaVPlusKmS"] = 0.5
+        solar["passage"] = {
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 270,
+            "orbitDirection": "prograde",
+            "entryBehavior": "ballistic",
+            "exitBehavior": "ballistic",
+        }
+        jupiter = section("sun", "jupiter", "sun-jupiter")
+        jupiter["deltaVPlusKmS"] = 0.5
+        jupiter["passage"] = {
+            "mode": "full-orbit",
+            "orbitAngleDeg": 360,
+            "orbitDirection": "prograde",
+            "entryBehavior": "ballistic",
+            "exitBehavior": "ballistic",
+        }
+        proxima = section("jupiter", "proxima-centauri", "jupiter-proxima")
+        proxima["deltaVPlusKmS"] = 0.5
+
+        result = simulate_route_sections({
+            "mission": {
+                "startDate": "2026-06-22",
+                "oberthDeltaVKmS": 8.0,
+                "carrierEnabled": True,
+                "kickStageEnabled": True,
+            },
+            "waypointId": "jupiter",
+            "routeSections": [solar, jupiter, proxima],
+        })
+
+        calculated_solar, calculated_jupiter, _ = result["routeSections"]
+        self.assertTrue(calculated_solar["targetCoupledPassagePlane"])
+        self.assertTrue(calculated_jupiter["targetCoupledPassagePlane"])
+        self.assertEqual(
+            calculated_solar["corridor"]["exitAngleSelection"]["method"],
+            "passive exit to next-body Lambert velocity coupling",
+        )
+        self.assertEqual(calculated_jupiter["lookaheadTargetId"], "proxima-centauri")
+        self.assertLess(result["summary"]["actualTargetAlignmentDeg"], 2.0)
+        self.assertLess(result["summary"]["targetCorrectionDeltaVKmS"], 3.0)
+        # The coupling exposes rather than hides the still-unavailable burn
+        # between the high-energy solar exit and Jupiter.
+        self.assertGreater(calculated_jupiter["requiredTransitionDeltaVKmS"], 0.5)
+        self.assertFalse(result["summary"]["feasibleWithConfiguredBurn"])
+
     def test_unsafe_lambert_fallback_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Kein kollisionsfreier"):
             _candidate(

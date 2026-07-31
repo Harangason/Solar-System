@@ -297,7 +297,11 @@ def _transfer_seconds(
     hohmann = pi * sqrt(((start_radius + end_radius) / 2) ** 3 / gravitational_parameter)
     minimum = 0.2 * DAY_SECONDS if local else 20 * DAY_SECONDS
     maximum = 120 * DAY_SECONDS if local else 20 * 365.25 * DAY_SECONDS
-    if reference_speed_km_s is not None and reference_speed_km_s > 0:
+    if (
+        not local
+        and reference_speed_km_s is not None
+        and reference_speed_km_s > 0
+    ):
         specific_energy = (
             reference_speed_km_s**2 / 2
             - gravitational_parameter / start_radius
@@ -756,7 +760,10 @@ def _targeted_passage_angle_deg(
     if lookahead_target is None:
         return passage["orbitAngleDeg"], None
 
-    if optimize_transfer_velocity:
+    if (
+        optimize_transfer_velocity
+        and _local_central_body(target, lookahead_target, catalog) is None
+    ):
         return _targeted_body_passage_angle_deg(
             passage=passage,
             target=target,
