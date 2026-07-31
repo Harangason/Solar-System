@@ -41,7 +41,10 @@ fachlich festgeschriebene Trichtergroesse `1005 -> 8 -> 22 -> 5`.
 
 Ein terminales interstellares Ziel wird immer durch den generischen Planner
 verarbeitet. Es ist kein lokaler Ephemeridenkoerper, sondern eine gerade,
-hypothetische 50-AE-Richtungsdarstellung ab dem letzten realen Zustand.
+hypothetische 50-AE-Richtungsdarstellung ab dem letzten realen Zustand. Bei
+einer vorausgehenden Umrundung dient diese Richtung zugleich als Look-ahead:
+Die Austrittsphase minimiert den heliocentrischen Restwinkel, und ein danach
+noch erforderlicher Richtungsimpuls wird als Abschnitts-Delta-v ausgewiesen.
 
 ## Tests
 

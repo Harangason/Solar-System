@@ -110,7 +110,24 @@ class MultiRoutePlannerTests(unittest.TestCase):
         self.assertTrue(asymptote["hypothetical"])
         self.assertEqual(asymptote["visualizationDistanceAu"], 50.0)
         self.assertEqual(result["outgoingDirection"], asymptote["entryDirection"])
-        self.assertEqual(result["summary"]["targetAlignmentDeg"], 0.0)
+        self.assertAlmostEqual(
+            result["summary"]["targetAlignmentDeg"],
+            asymptote["lookaheadAlignmentDeg"],
+        )
+        self.assertGreater(asymptote["requiredTransitionDeltaVKmS"], 0.0)
+        self.assertAlmostEqual(
+            result["summary"]["targetCorrectionDeltaVKmS"],
+            asymptote["requiredTransitionDeltaVKmS"],
+        )
+        jupiter = result["routeSections"][0]
+        selection = jupiter["corridor"]["exitAngleSelection"]
+        self.assertEqual(selection["lookaheadTargetId"], "proxima-centauri")
+        self.assertEqual(
+            selection["method"],
+            "heliocentric next-target velocity alignment",
+        )
+        self.assertGreaterEqual(selection["selectedAngleDeg"], 200.0)
+        self.assertLessEqual(selection["selectedAngleDeg"], 560.0)
         self.assertTrue(result["summary"]["hypotheticalInterstellarAsymptote"])
 
     def test_non_interstellar_explicit_passage_still_uses_generic_solver(self):

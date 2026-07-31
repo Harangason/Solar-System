@@ -171,10 +171,22 @@ Sternzentrum missverstanden. Er ist eine richtungsgebundene ECLIPJ2000-
 Asymptote ohne lokale Ephemeride. Fuer die Visualisierung erzeugt der generische
 Planner ab dem letzten realen Austrittszustand einen geraden Katalogstrahl von
 exakt `50 AE`. Dieser Abschnitt hat keine Sternankunftszeit, keine lokale
-Passage und kein eigenes Delta-v-Soll. `hypothetical`, `noLocalEphemeris` und
+Passage. Vor dem Zeichnen wird jedoch die Richtungsdifferenz zwischen dem
+realen Austrittsvektor und dem Katalogstrahl als explizites
+`requiredTransitionDeltaVKmS` ausgewiesen und gegen den Delta-v-Faecher des
+interstellaren Abschnitts geprueft. `hypothetical`, `noLocalEphemeris` und
 `visualizationDistanceAu` kennzeichnen diese Modellgrenze im Ergebnis. Die
 physikalische Flugfaehigkeit der realen Teilroute und die hypothetische
 Zielrichtung bleiben getrennte Aussagen.
+
+Hat der vorherige reale Zielkoerper eine Teil- oder Vollumrundung, wird die
+interstellare J2000-Richtung als Look-ahead-Randbedingung an diese Passage
+zurueckgegeben. Der schnelle gekoppelte Schritt variiert die Austrittsphase um
+hoechstens eine weitere Umrundung und minimiert den Winkel zwischen dem
+heliocentrischen Austrittsvektor (Planetenbewegung plus Relativbewegung) und
+der Sternrichtung. Damit bleiben grobe Teilstrecken separat editierbar, waehrend
+Kurs- und Geschwindigkeitseffekt der Passage vor einer verbleibenden aktiven
+Zielkorrektur genutzt werden.
 
 Die Laplace-Einflusssphäre wird angenähert durch
 

@@ -56,7 +56,7 @@ function passageLabel(section: RouteSectionDefinition) {
   if (section.passage.mode === 'partial-orbit') {
     return `Teilumrundung · ${section.passage.orbitAngleDeg.toFixed(0)}° · ${section.passage.orbitDirection === 'prograde' ? 'prograd' : 'retrograd'}`
   }
-  return 'Direkte Passage · keine vorgegebene Umrundung'
+  return 'Direkter Vorbeiflug · nicht eingefangen'
 }
 
 function objectName(objectId: string, planets: PlanetData[], moons: MoonData[]) {
@@ -318,7 +318,7 @@ export function RouteSectionWizard({
             <div className="wizard-passage-modes" role="radiogroup" aria-label="Art der Zielpassage">
               <label>
                 <input type="radio" name="passage-mode" checked={draft.passage.mode === 'direct'} onChange={() => setPassageMode('direct')} />
-                <span><strong>Direkte Passage</strong><small>Keine Umrundung vorgeben</small></span>
+                <span><strong>Direkter Vorbeiflug</strong><small>Außerhalb des Sicherheitsabstands · keine Einfangbahn</small></span>
               </label>
               <label>
                 <input type="radio" name="passage-mode" checked={draft.passage.mode === 'partial-orbit'} onChange={() => setPassageMode('partial-orbit')} />
@@ -329,6 +329,12 @@ export function RouteSectionWizard({
                 <span><strong>Volle Umrundung</strong><small>Ein vollständiger Umlauf mit 360°</small></span>
               </label>
             </div>
+
+            {draft.passage.mode === 'direct' && (
+              <p className="wizard-direct-passage-note" role="note">
+                Die Sonde fliegt ungebunden am Zielkörper vorbei und hält den Mindestabstand einschließlich Gravitationsreserve ein. Sie durchquert den Körper nicht, wird nicht eingefangen und beginnt keinen Umlauf. Die Gravitation wirkt weiterhin, erzeugt aber keine gebundene Bahn.
+              </p>
+            )}
 
             {draft.passage.mode !== 'direct' && (
               <div className="wizard-passage-grid">

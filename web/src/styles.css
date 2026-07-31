@@ -144,6 +144,24 @@ button { font: inherit; }
 .two-d-footnote,
 .corridor-instruction { margin: 8px 4px; color: #8fa7bc; font-size: .72rem; }
 .two-d-orbit-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(270px, 320px); gap: 12px; align-items: start; }
+.corridor-local-three-d { min-width: 0; }
+.local-planet-three-d { min-width: 0; overflow: hidden; border: 1px solid rgba(121,228,255,.18); border-radius: 22px; background: #020712; box-shadow: 0 28px 80px rgba(0,0,0,.35); }
+.local-planet-three-d > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 16px; border-bottom: 1px solid rgba(255,255,255,.09); color: #e8f7ff; background: rgba(7,17,32,.92); }
+.local-planet-three-d h2 { margin: 2px 0 0; font-size: 1rem; }
+.local-planet-three-d header small { color: #819cb1; font-size: .65rem; }
+.local-planet-three-d header span { padding: 5px 8px; border: 1px solid rgba(121,228,255,.22); border-radius: 999px; color: #9bc9dd; font-size: .62rem; white-space: nowrap; }
+.local-planet-three-d-canvas { height: min(66vh, 650px); min-height: 430px; cursor: grab; touch-action: none; }
+.local-planet-three-d-canvas:active { cursor: grabbing; }
+.local-three-d-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 10px 16px 12px; border-top: 1px solid rgba(255,255,255,.08); color: #9bb1c3; font-size: .66rem; background: rgba(7,17,32,.92); }
+.local-three-d-legend span::before { content: ''; display: inline-block; width: 18px; height: 2px; margin: 0 7px 2px 0; border-radius: 2px; background: currentColor; }
+.local-three-d-legend .entry { color: #65f0b7; }
+.local-three-d-legend .exit { color: #ffbf66; }
+.local-three-d-legend .actual { color: #fff; }
+.local-three-d-legend .entry-vector { color: #67dcff; }
+.local-three-d-legend .passage { color: #fff06f; }
+.local-three-d-legend .safe { color: #65f0b7; }
+.local-three-d-legend .moons { color: #91cde8; }
+.wizard-direct-passage-note { margin: 12px 0 2px; padding: 10px 12px; border: 1px solid rgba(101,240,183,.3); border-radius: 12px; color: #a9d9c4; font-size: .72rem; line-height: 1.5; background: rgba(27,112,76,.1); }
 .orbital-plot { overflow: auto; padding: 0; cursor: grab; user-select: none; touch-action: none; overscroll-behavior: contain; scrollbar-color: #38506c transparent; scrollbar-gutter: stable; }
 .orbital-plot.panning { cursor: grabbing; }
 .orbital-plot.panning svg { pointer-events: none; }

@@ -361,11 +361,89 @@ def _passage_basis(entry_direction: tuple, incoming_relative_velocity: tuple) ->
     return tangent, normal
 
 
+def _targeted_interstellar_passage_angle_deg(
+    *,
+    passage: dict,
+    target: RouteBody,
+    interstellar_target_id: str,
+    catalog: dict[str, RouteBody],
+    epoch_days: float,
+    entry_day: float,
+    entry_radius: float,
+    passage_speed: float,
+    entry_direction: tuple,
+    normal: tuple,
+    direction_sign: float,
+) -> tuple[float, dict]:
+    """Choose the exit phase whose heliocentric velocity best faces the star.
+
+    The editor may still create the two coarse legs independently.  This
+    look-ahead pass couples them afterwards without inventing a velocity turn
+    on the outbound interstellar leg.
+    """
+    desired_direction = interstellar_direction(interstellar_target_id)
+    requested_angle = float(passage["orbitAngleDeg"])
+    minimum_angle = 360.0 if passage["mode"] == "full-orbit" else requested_angle
+    candidates: list[dict] = []
+    for step in range(721):
+        selected_angle = minimum_angle + step * 0.5
+        duration_seconds = (
+            selected_angle * pi / 180 * entry_radius / passage_speed
+            if passage_speed > 0
+            else 0.0
+        )
+        _, target_velocity = _body_state(
+            target,
+            epoch_days + entry_day + duration_seconds / DAY_SECONDS,
+            catalog,
+        )
+        radial = _normalize(_rotate_vector(
+            entry_direction,
+            normal,
+            direction_sign * selected_angle * pi / 180,
+        ))
+        tangent = _normalize(_cross(normal, radial))
+        if direction_sign < 0:
+            tangent = tuple(-component for component in tangent)
+        relative_velocity = tuple(passage_speed * component for component in tangent)
+        heliocentric_velocity = _add(target_velocity, relative_velocity)
+        candidates.append({
+            "angleDeg": selected_angle,
+            "alignmentDeg": _angle_deg(heliocentric_velocity, desired_direction),
+            "exitDirection": radial,
+            "heliocentricVelocity": heliocentric_velocity,
+            "targetVelocity": target_velocity,
+        })
+    selected = min(
+        candidates,
+        key=lambda item: (item["alignmentDeg"], item["angleDeg"]),
+    )
+    return selected["angleDeg"], {
+        "method": "heliocentric next-target velocity alignment",
+        "lookaheadTargetId": interstellar_target_id,
+        "requestedAngleDeg": requested_angle,
+        "selectedAngleDeg": selected["angleDeg"],
+        "autoExtendedAngleDeg": max(0.0, selected["angleDeg"] - requested_angle),
+        "desiredExitDirection": list(desired_direction),
+        "desiredExitRadialDirection": list(selected["exitDirection"]),
+        "predictedHeliocentricExitDirection": list(_normalize(
+            selected["heliocentricVelocity"]
+        )),
+        "predictedAlignmentDeg": selected["alignmentDeg"],
+        "lineOfSightClear": True,
+        "bestApproximation": selected["alignmentDeg"] > 0.5,
+        "requiresCurvedTransfer": False,
+        "keepOutRadiusKm": entry_radius,
+        "departureClearanceKm": entry_radius - target.radius_km,
+    }
+
+
 def _targeted_passage_angle_deg(
     *,
     passage: dict,
     target: RouteBody,
     lookahead_target: RouteBody | None,
+    lookahead_interstellar_target_id: str | None,
     catalog: dict[str, RouteBody],
     epoch_days: float,
     entry_day: float,
@@ -375,7 +453,25 @@ def _targeted_passage_angle_deg(
     normal: tuple,
     direction_sign: float,
 ) -> tuple[float, dict | None]:
-    if lookahead_target is None or passage["mode"] == "direct":
+    if passage["mode"] == "direct":
+        return passage["orbitAngleDeg"], None
+
+    if lookahead_interstellar_target_id is not None:
+        return _targeted_interstellar_passage_angle_deg(
+            passage=passage,
+            target=target,
+            interstellar_target_id=lookahead_interstellar_target_id,
+            catalog=catalog,
+            epoch_days=epoch_days,
+            entry_day=entry_day,
+            entry_radius=entry_radius,
+            passage_speed=passage_speed,
+            entry_direction=entry_direction,
+            normal=normal,
+            direction_sign=direction_sign,
+        )
+
+    if lookahead_target is None:
         return passage["orbitAngleDeg"], None
 
     requested_angle = float(passage["orbitAngleDeg"])
@@ -478,6 +574,7 @@ def _local_passage(
     section: dict,
     target: RouteBody,
     lookahead_target: RouteBody | None,
+    lookahead_interstellar_target_id: str | None,
     catalog: dict[str, RouteBody],
     epoch_days: float,
     entry_day: float,
@@ -525,6 +622,7 @@ def _local_passage(
         passage=passage,
         target=target,
         lookahead_target=lookahead_target,
+        lookahead_interstellar_target_id=lookahead_interstellar_target_id,
         catalog=catalog,
         epoch_days=epoch_days,
         entry_day=entry_day,
@@ -579,6 +677,11 @@ def _local_passage(
 
     exit_direction = _normalize(_rotate_vector(entry_direction, normal, orbit_angle_rad))
     exit_velocity = tuple(points[-1]["velocityKmS"])
+    desired_lookahead_direction = (
+        interstellar_direction(lookahead_interstellar_target_id)
+        if lookahead_interstellar_target_id is not None
+        else None
+    )
     return {
         "trajectory": points,
         "exitDay": points[-1]["elapsedDays"],
@@ -587,6 +690,15 @@ def _local_passage(
         "exitDirection": exit_direction,
         "exitAngleDeg": selected_angle_deg * direction_sign,
         "exitAngleSelection": exit_angle_selection,
+        "lookaheadAlignmentDeg": (
+            _angle_deg(exit_velocity, desired_lookahead_direction)
+            if desired_lookahead_direction is not None
+            else 0.0
+        ),
+        "courseChangeDeg": _angle_deg(arrival_velocity, exit_velocity),
+        "heliocentricSpeedGainKmS": (
+            _magnitude(exit_velocity) - _magnitude(arrival_velocity)
+        ),
         "passageDurationDays": duration_seconds / DAY_SECONDS,
         "passageDeltaVKmS": entry_delta_v,
         "minimumRadiusKm": minimum_radius,
@@ -680,6 +792,20 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
         if stellar_target_id is not None:
             stellar_record = INTERSTELLAR_ROUTE_TARGETS[stellar_target_id]
             direction = interstellar_direction(stellar_target_id)
+            outbound_speed = max(_magnitude(start_velocity), 1e-9)
+            desired_velocity = tuple(
+                outbound_speed * component for component in direction
+            )
+            transition_delta_v = _magnitude(
+                _subtract(desired_velocity, start_velocity)
+            )
+            alignment_deg = _angle_deg(start_velocity, direction)
+            transition_applied = (
+                transition_delta_v <= section["deltaVPlusKmS"] + 1e-9
+            )
+            asymptote_velocity = (
+                desired_velocity if transition_applied else start_velocity
+            )
             segment_start_index = len(trajectory) - 1
             visualization_length_km = HYPOTHETICAL_ASYMPTOTE_DISTANCE_AU * AU_KM
             endpoint = _add(
@@ -689,7 +815,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             trajectory.append({
                 "elapsedDays": start_day,
                 "positionKm": list(endpoint),
-                "velocityKmS": list(start_velocity),
+                "velocityKmS": list(asymptote_velocity),
                 "phase": "HYPOTHETICAL_INTERSTELLAR_ASYMPTOTE",
             })
             endpoint_index = len(trajectory) - 1
@@ -715,17 +841,25 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
                     direction[2], sqrt(direction[0] ** 2 + direction[1] ** 2)
                 ) * 180 / pi,
                 "exitPositionKm": list(endpoint),
-                "exitVelocityKmS": list(start_velocity),
+                "exitVelocityKmS": list(asymptote_velocity),
                 "minimumAltitudeKm": 0.0,
                 "sphereOfInfluenceRadiusKm": 0.0,
-                "requiredTransitionDeltaVKmS": 0.0,
+                "requiredTransitionDeltaVKmS": transition_delta_v,
+                "availableTransitionDeltaVKmS": section["deltaVPlusKmS"],
+                "transitionDeltaVDeficitKmS": max(
+                    0.0, transition_delta_v - section["deltaVPlusKmS"]
+                ),
                 "requiredPassageDeltaVKmS": 0.0,
-                "requiredSectionDeltaVKmS": 0.0,
+                "requiredSectionDeltaVKmS": transition_delta_v,
                 "corridorInsertionDeltaVKmS": 0.0,
-                "entryVelocityPreserved": True,
+                "entryVelocityPreserved": transition_delta_v < 1e-9,
                 "lookaheadTargetId": None,
-                "lookaheadAlignmentDeg": 0.0,
+                "lookaheadAlignmentDeg": alignment_deg,
                 "predictedPassiveTurnDeg": 0.0,
+                "desiredDepartureDirection": list(direction),
+                "predictedOutgoingDirection": list(_normalize(start_velocity)),
+                "courseChangeDeg": alignment_deg if transition_applied else 0.0,
+                "heliocentricSpeedGainKmS": 0.0,
                 "passage": section["passage"],
                 "requestedPassageAngleDeg": 0.0,
                 "selectedPassageAngleDeg": 0.0,
@@ -753,6 +887,8 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
                 "endIndex": endpoint_index,
             })
             start_position = endpoint
+            start_velocity = asymptote_velocity
+            total_delta_v += transition_delta_v
             hypothetical_asymptote_direction = direction
             continue
         central = _local_central_body(origin, target, catalog)
@@ -884,6 +1020,11 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             lookahead_target=(
                 parsed[index + 1]["target"] if index + 1 < len(parsed) else None
             ),
+            lookahead_interstellar_target_id=(
+                parsed[index + 1]["interstellarTargetId"]
+                if index + 1 < len(parsed)
+                else None
+            ),
             catalog=catalog,
             epoch_days=epoch_days,
             entry_day=arrival_day,
@@ -939,8 +1080,14 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
                 )
                 if index + 1 < len(parsed) else None
             ),
-            "lookaheadAlignmentDeg": 0.0,
-            "predictedPassiveTurnDeg": 0.0,
+            "lookaheadAlignmentDeg": passage_result.get("lookaheadAlignmentDeg", 0.0),
+            "predictedPassiveTurnDeg": passage_result.get("courseChangeDeg", 0.0),
+            "courseChangeDeg": passage_result.get("courseChangeDeg", 0.0),
+            "heliocentricSpeedGainKmS": passage_result.get(
+                "heliocentricSpeedGainKmS", 0.0
+            ),
+            "heliocentricSpeedBeforeKmS": _magnitude(arrival_velocity),
+            "heliocentricSpeedAfterKmS": _magnitude(exit_velocity),
             "passage": section["passage"],
             "requestedPassageAngleDeg": section["passage"]["orbitAngleDeg"],
             "selectedPassageAngleDeg": abs(passage_result["exitAngleDeg"]),
@@ -1029,6 +1176,18 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
         <= parsed[index]["deltaVPlusKmS"] + 1e-9
         for index, section in enumerate(calculated)
     )
+    target_transition_section = (
+        calculated[-1]
+        if calculated[-1].get("sectionType") == "interstellar-asymptote"
+        else calculated[1]
+        if len(calculated) > 1
+        else None
+    )
+    target_correction_delta_v = (
+        target_transition_section["requiredTransitionDeltaVKmS"]
+        if target_transition_section is not None
+        else 0.0
+    )
     return {
         "startDate": start_date,
         "calculationStage": "geometry" if geometry_only else "performance",
@@ -1089,27 +1248,33 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
                 <= first_definition["deltaVPlusKmS"] + 1e-9
             ),
             "incomingExcessSpeedKmS": 0.0,
-            "turnAngleDeg": 0.0,
-            "heliocentricSpeedBeforeKmS": _magnitude(tuple(trajectory[0]["velocityKmS"])),
-            "heliocentricSpeedAfterKmS": _magnitude(final_velocity),
-            "speedGainKmS": (
-                _magnitude(final_velocity)
-                - _magnitude(tuple(trajectory[0]["velocityKmS"]))
+            "turnAngleDeg": focus.get("courseChangeDeg", 0.0),
+            "heliocentricSpeedBeforeKmS": focus.get(
+                "heliocentricSpeedBeforeKmS",
+                _magnitude(tuple(trajectory[0]["velocityKmS"])),
             ),
-            "targetCorrectionDeltaVKmS": (
-                calculated[1]["requiredTransitionDeltaVKmS"]
-                if len(calculated) > 1 else 0.0
+            "heliocentricSpeedAfterKmS": focus.get(
+                "heliocentricSpeedAfterKmS", _magnitude(final_velocity)
             ),
+            "speedGainKmS": focus.get("heliocentricSpeedGainKmS", 0.0),
+            "targetCorrectionDeltaVKmS": target_correction_delta_v,
             "targetInjectionApplied": (
                 feasible_with_configured_burn and len(calculated) > 1
             ),
             "passiveTargeting": (
                 feasible_with_configured_burn and len(calculated) == 1
             ),
-            "courseChangeDeg": 0.0,
-            "periapsisSpeedKmS": _magnitude(final_velocity),
+            "courseChangeDeg": focus.get("courseChangeDeg", 0.0),
+            "periapsisSpeedKmS": focus.get(
+                "heliocentricSpeedAfterKmS", _magnitude(final_velocity)
+            ),
             "observationWindowHours": 0.0,
-            "targetAlignmentDeg": 0.0,
+            "targetAlignmentDeg": calculated[-1].get("lookaheadAlignmentDeg", 0.0),
+            "actualTargetAlignmentDeg": (
+                0.0
+                if feasible_with_configured_burn and target_transition_section is not None
+                else calculated[-1].get("lookaheadAlignmentDeg", 0.0)
+            ),
             "feasibleWithConfiguredBurn": feasible_with_configured_burn,
             "hypotheticalInterstellarAsymptote": (
                 hypothetical_asymptote_direction is not None

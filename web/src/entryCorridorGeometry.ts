@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 
 export type CorridorTuple = [number, number, number]
-export type CorridorMainProjection = 'side' | 'top'
+export type CorridorMainProjection = 'side' | 'top' | 'sunward'
 
 export interface EntryCorridorDefinition {
   enabled: boolean

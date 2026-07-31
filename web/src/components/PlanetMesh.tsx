@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 
 import { planetPositionAt } from '../orbitalMath'
+import { planetTextureUrl } from '../planetTextures'
 import type { PlanetData } from '../types'
 
 interface PlanetMeshProps {
@@ -17,22 +18,11 @@ interface PlanetMeshProps {
   onSelect: (planet: PlanetData) => void
 }
 
-const PLANET_TEXTURES: Record<string, string> = {
-  mercury: '/assets/planets/mercury.jpg',
-  venus: '/assets/planets/venus.jpg',
-  earth: '/assets/planets/earth.jpg',
-  mars: '/assets/planets/mars.jpg',
-  jupiter: '/assets/planets/jupiter.jpg',
-  saturn: '/assets/planets/saturn.jpg',
-  uranus: '/assets/planets/uranus.jpg',
-  neptune: '/assets/planets/neptune.jpg',
-}
-
 export function PlanetMesh({ planet, size, timestampMs, distanceScale, inclinationScale, ringScale, showLabels, onSelect }: PlanetMeshProps) {
   const positionRef = useRef<THREE.Group>(null)
   const planetRef = useRef<THREE.Mesh>(null)
   const [hovered, setHovered] = useState(false)
-  const texture = useTexture(PLANET_TEXTURES[planet.id] ?? PLANET_TEXTURES.earth)
+  const texture = useTexture(planetTextureUrl(planet.id))
 
   useEffect(() => {
     texture.colorSpace = THREE.SRGBColorSpace

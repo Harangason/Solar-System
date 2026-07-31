@@ -17,9 +17,10 @@ import {
   type CorridorTargetPhysics,
 } from '../corridorFeasibility'
 import { ROUTE_INTERSTELLAR_SYSTEMS } from '../interstellarTargets'
-import type { RoutePassageDirection } from '../routeSections'
+import type { RoutePassageDefinition } from '../routeSections'
 import type { MoonData, PlanetData, SunData } from '../types'
 import type { Vector3Tuple } from '../targetAlignedProjection'
+import { LocalPlanetThreeD } from './LocalPlanetThreeD'
 import { SunwardCorridorView } from './SunwardCorridorView'
 
 interface PlanetCorridorPlannerProps {
@@ -37,12 +38,14 @@ interface PlanetCorridorPlannerProps {
   onDeltaVMinusChange: (value: number) => void
   onDeltaVPlusChange: (value: number) => void
   sectionNumber: number
-  passageDirection?: RoutePassageDirection
+  passage: RoutePassageDefinition
   sunToTargetDirection?: Vector3Tuple | null
   actualEntryDirection?: Vector3Tuple | null
+  exitDirection?: Vector3Tuple | null
+  epochLabel: string
 }
 
-type CorridorProjection = CorridorMainProjection | 'sunward'
+type CorridorProjection = CorridorMainProjection | 'local3d'
 
 const CANVAS_WIDTH = 1000
 const CANVAS_HEIGHT = 620
@@ -112,9 +115,11 @@ export function PlanetCorridorPlanner({
   onDeltaVMinusChange,
   onDeltaVPlusChange,
   sectionNumber,
-  passageDirection = 'prograde',
+  passage,
   sunToTargetDirection = null,
   actualEntryDirection = null,
+  exitDirection = null,
+  epochLabel,
 }: PlanetCorridorPlannerProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const dragging = useRef(false)
@@ -123,14 +128,23 @@ export function PlanetCorridorPlanner({
   const isTopProjection = projection === 'top'
   const isSideProjection = projection === 'side'
   const isSunwardProjection = projection === 'sunward'
+  const isLocalThreeDProjection = projection === 'local3d'
   const isMainProjection = projection === mainProjection
   const isInterstellarTarget = ROUTE_INTERSTELLAR_SYSTEMS.some((system) => system.id === waypointId)
+  const passageDirection = passage.orbitDirection
   const selectedTarget = waypointId === 'sun'
     ? sun
     : planets.find((planet) => planet.id === waypointId)
       ?? moons.find((moon) => moon.id === waypointId)
       ?? ROUTE_INTERSTELLAR_SYSTEMS.find((system) => system.id === waypointId)
       ?? planets[0]
+  const localPlanet = planets.find((planet) => planet.id === waypointId)
+    ?? (selectedTarget && 'parentId' in selectedTarget
+      ? planets.find((planet) => planet.id === selectedTarget.parentId)
+      : undefined)
+  const localPlanetMoons = localPlanet
+    ? moons.filter((moon) => moon.parentId === localPlanet.id)
+    : []
   const targetPhysics: CorridorTargetPhysics = {
     radiusKm: selectedTarget && 'radiusKm' in selectedTarget ? selectedTarget.radiusKm : undefined,
     surfaceGravity: selectedTarget && 'surfaceGravity' in selectedTarget ? selectedTarget.surfaceGravity : undefined,
@@ -365,7 +379,7 @@ export function PlanetCorridorPlanner({
       </div>
 
       <p className="corridor-instruction">
-        Ein gemeinsamer räumlicher Zielkorridor: Seite, Draufsicht und der Blick von der Sonne verwenden dieselben 3D-Koordinaten.
+        Ein gemeinsamer räumlicher Zielkorridor: Seite, Draufsicht, Sonnenebene und die lokale 3D-Ansicht verwenden dasselbe aktive Zielobjekt.
       </p>
 
       <div className="corridor-projection-switcher" role="group" aria-label="Korridoransicht">
@@ -420,9 +434,34 @@ export function PlanetCorridorPlanner({
           >
             Von der Sonne · Querebene
           </button>
+          <label>
+            <input
+              type="checkbox"
+              checked={mainProjection === 'sunward'}
+              disabled={!sunToTargetDirection || isInterstellarTarget || waypointId === 'sun'}
+              onChange={(event) => {
+                if (!event.target.checked) return
+                commitDefinitionChange((current) => ({ ...current, mainProjection: 'sunward' }))
+                setProjection('sunward')
+              }}
+            />
+            Main
+          </label>
+        </div>
+        <div className={isLocalThreeDProjection ? 'corridor-projection-option active' : 'corridor-projection-option'}>
+          <button
+            type="button"
+            aria-pressed={isLocalThreeDProjection}
+            disabled={!localPlanet}
+            onClick={() => setProjection('local3d')}
+          >
+            3D lokal{localPlanet ? ` · ${localPlanet.name}` : ''}
+          </button>
         </div>
         <span className={isMainProjection ? 'projection-mode-badge main' : 'projection-mode-badge'}>
-          {isSunwardProjection
+          {isLocalThreeDProjection
+            ? 'Aktiver Zielplanet · 3D-Ansicht'
+            : isSunwardProjection
             ? 'Zielbezogen · bearbeitbar'
             : isMainProjection
             ? 'Main · bearbeitbar'
@@ -441,7 +480,22 @@ export function PlanetCorridorPlanner({
         </span>
       </div>}
 
-      {isInterstellarTarget
+      {isLocalThreeDProjection && localPlanet
+        ? (
+          <div className="corridor-local-three-d">
+            <LocalPlanetThreeD
+              planet={localPlanet}
+              moons={localPlanetMoons}
+              epochLabel={epochLabel}
+              corridorDefinition={definition}
+              actualEntryDirection={actualEntryDirection}
+              exitDirection={exitDirection}
+              passage={passage}
+            />
+            <p className="two-d-footnote">Aktiver Zielplanet · ziehen zum Drehen · Mausrad zum Zoomen.</p>
+          </div>
+        )
+        : isInterstellarTarget
         ? (
           <div className="hypothetical-target-direction" role="status">
             <strong>{selectedTarget?.name ?? waypointId} bleibt hypothetisch</strong>

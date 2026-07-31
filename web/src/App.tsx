@@ -385,7 +385,6 @@ export function App() {
                 plannedRoute={plannedRoute}
                 onApplyPlannedSolution={applyPlannedSolution}
                 missionConfig={missionConfig}
-                onOpenThreeD={() => setViewMode('3d')}
               />
             )
             : (

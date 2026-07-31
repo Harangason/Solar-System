@@ -62,19 +62,19 @@ export function constellationSearchBudget(
 ): ConstellationSearchBudget {
   const routeComplexity = Math.max(1, routeSectionCount)
   const geometricShortlistLimit = clamp(
-    Math.ceil(Math.sqrt(Math.max(1, geometricNodeCount)) * 0.7) + routeComplexity * 4,
-    24,
-    72,
+    Math.ceil(Math.sqrt(Math.max(1, geometricNodeCount)) * 2) + routeComplexity * 16,
+    120,
+    360,
   )
   const preflightSolverBudget = clamp(
-    geometricShortlistLimit * 2 + routeComplexity * 12,
-    72,
+    geometricShortlistLimit * 3 + routeComplexity * 24,
     192,
+    900,
   )
   const fullValidationBudget = clamp(
-    Math.ceil(geometricShortlistLimit / 3) + routeComplexity * 2,
-    12,
-    32,
+    Math.ceil(geometricShortlistLimit * 0.6) + routeComplexity * 8,
+    72,
+    240,
   )
   return { geometricShortlistLimit, preflightSolverBudget, fullValidationBudget }
 }

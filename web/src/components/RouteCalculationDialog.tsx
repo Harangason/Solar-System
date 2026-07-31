@@ -51,6 +51,10 @@ export interface RouteCalculationTrace {
   candidates: RouteCalculationCandidateTrace[]
   resultCount: number
   flightReadyCount: number
+  goodResultCount?: number
+  targetGoodResults?: number
+  adaptiveRound?: number
+  stopReason?: string
   bestDate?: string
   error?: string
 }
@@ -77,6 +81,9 @@ const STAGE_NAMES: Record<string, string> = {
   'graph-refinement-level-3': 'Nachsuche E3',
   'graph-refinement-level-4': 'Nachsuche E4',
   'corridor-full-validation': 'Geometrische Wegpunktprüfung',
+  'adaptive-passage-round-1': 'Adaptive Passage R1',
+  'adaptive-passage-round-2': 'Adaptive Passage R2',
+  'adaptive-passage-round-3': 'Adaptive Passage R3',
 }
 
 const STATUS_NAMES: Record<RouteCalculationCandidateStatus, string> = {
@@ -230,6 +237,8 @@ export function RouteCalculationDialog({
   const selectedRoutePath = routePath(selectedCandidate?.routePoints)
   const solvedCount = trace.candidates.filter((candidate) => candidate.status !== 'running').length
   const fullValidationCount = trace.candidates.filter((candidate) => candidate.fullCorridorCheck).length
+  const targetGoodResults = trace.targetGoodResults ?? 10
+  const goodResultCount = trace.goodResultCount ?? trace.flightReadyCount
   const deficit = selectedCandidate ? candidateDeficit(selectedCandidate) : undefined
   const comparisonCandidate = selectedCandidate
     ? [...trace.candidates].reverse().find((candidate) => (
@@ -287,13 +296,13 @@ export function RouteCalculationDialog({
         <section className="calculation-funnel" aria-label="Suchtrichter">
           <article><strong>{trace.graphNodes.toLocaleString('de-DE')}</strong><span>Geometriepunkte</span></article>
           <span aria-hidden="true">→</span>
-          <article><strong>{trace.geometricShortlist}</strong><span>Shortlist</span></article>
+          <article><strong>{trace.geometricShortlist}</strong><span>Shortlist · erweitert</span></article>
           <span aria-hidden="true">→</span>
-          <article><strong>{solvedCount}/{trace.preflightBudget + trace.fullValidationBudget}</strong><span>Solverläufe</span></article>
+          <article><strong>{solvedCount}</strong><span>Solverläufe · adaptiv</span></article>
           <span aria-hidden="true">→</span>
-          <article><strong>{fullValidationCount}/{trace.fullValidationBudget}</strong><span>Vollprüfungen</span></article>
+          <article><strong>{fullValidationCount}</strong><span>Vollprüfungen</span></article>
           <span aria-hidden="true">→</span>
-          <article><strong>{trace.flightReadyCount}/{trace.resultCount}</strong><span>flugfähig / Resultate</span></article>
+          <article><strong>{goodResultCount}/{targetGoodResults}</strong><span>gute Resultate · Ziel</span></article>
         </section>
 
         <div className="calculation-meta">
@@ -301,9 +310,14 @@ export function RouteCalculationDialog({
           <span>Raster {trace.broadStepDays} Tage</span>
           <span>{trace.graphEdges.toLocaleString('de-DE')} Graphkanten</span>
           <span>Run {trace.runId.slice(0, 8)}</span>
+          <span>Adaptive Runde {trace.adaptiveRound ?? 0}</span>
+          <span>{trace.flightReadyCount} strikt flugfähig</span>
         </div>
 
         {trace.error ? <p className="calculation-error">{trace.error}</p> : null}
+        {trace.stopReason
+          ? <p className={goodResultCount >= targetGoodResults ? 'calculation-empty' : 'calculation-error'}>{trace.stopReason}</p>
+          : null}
 
         <section className="calculation-grid">
           <article className="calculation-panel">
@@ -422,7 +436,7 @@ export function RouteCalculationDialog({
       </div>
 
       <footer>
-        <p>{trace.running ? 'Die Ansicht wird während der Berechnung aktualisiert.' : `${trace.candidates.length} Solvervarianten protokolliert.`}</p>
+        <p>{trace.running ? `Suche läuft bis mindestens ${targetGoodResults} gute Resultate gefunden oder alle Passagevarianten ausgeschöpft sind.` : `${trace.candidates.length} Solvervarianten protokolliert. ${trace.stopReason ?? ''}`}</p>
         <button type="button" onClick={onClose}>Schließen</button>
       </footer>
     </dialog>

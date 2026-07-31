@@ -218,6 +218,20 @@ class CalculationStoreTests(unittest.TestCase):
         restored = self.store.get_run(run["id"], include_trajectories=False)
         self.assertEqual(restored["projectId"], "")
 
+    def test_run_budgets_can_expand_during_adaptive_search(self):
+        run = self.start_run()
+
+        updated = self.store.update_run(
+            run["id"],
+            {
+                "preflightBudget": 90,
+                "fullValidationBudget": 45,
+            },
+        )
+
+        self.assertEqual(updated["preflightBudget"], 90)
+        self.assertEqual(updated["fullValidationBudget"], 45)
+
     def test_delete_run_cascades_to_all_result_tables(self):
         run = self.start_run()
         self.record_variant(run["id"])

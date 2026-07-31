@@ -404,6 +404,8 @@ class CalculationStore:
             "graphNodes": ("geometric_node_count", _optional_int),
             "graphEdges": ("graph_edge_count", _optional_int),
             "shortlistCount": ("shortlist_count", _optional_int),
+            "preflightBudget": ("preflight_budget", _optional_int),
+            "fullValidationBudget": ("full_validation_budget", _optional_int),
             "resultCount": ("result_count", _optional_int),
             "flightReadyCount": ("flight_ready_count", _optional_int),
             "error": ("error_message", str),
