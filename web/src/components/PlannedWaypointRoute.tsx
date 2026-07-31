@@ -31,6 +31,10 @@ function RouteSectionStateLabel({ children, title }: { children: ReactNode; titl
 }
 
 export interface WaypointRouteResult {
+  calculationPersistence?: {
+    runId: string
+    variantId: string
+  }
   startDate: string
   totalFlightDays: number
   warnings?: string[]
@@ -345,6 +349,8 @@ export interface WaypointRouteResult {
     observationWindowHours: number
     targetAlignmentDeg: number
     feasibleWithConfiguredBurn: boolean
+    hypotheticalInterstellarAsymptote?: boolean
+    interstellarVisualizationDistanceAu?: number | null
     highFidelityNBodyConverged?: boolean
     highFidelityNBodyCollision?: boolean
     highFidelityRequiredDepartureDeltaVKmS?: number

@@ -234,6 +234,7 @@ button { font: inherit; }
 .corridor-projection-switcher { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 13px 9px; }
 .corridor-projection-option { display: flex; align-items: center; overflow: hidden; border: 1px solid rgba(255,255,255,.13); border-radius: 999px; background: rgba(255,255,255,.045); }
 .corridor-projection-option button { padding: 6px 10px; border: 0; color: #a9bed2; background: transparent; cursor: pointer; }
+.corridor-projection-option button:disabled { cursor: not-allowed; opacity: .42; }
 .corridor-projection-option label { display: flex; align-items: center; gap: 4px; padding: 6px 9px 6px 7px; border-left: 1px solid rgba(255,255,255,.1); color: #91a9bc; font-size: .62rem; cursor: pointer; }
 .corridor-projection-option input { accent-color: #8be8ff; }
 .corridor-projection-option:hover,
@@ -300,6 +301,28 @@ button { font: inherit; }
 .corridor-legend-line.maximum { stroke: #ffda67; }
 .corridor-legend-line.safety { stroke: #ff7182; stroke-dasharray: 6 5; }
 .corridor-legend-line.delta-v { stroke: #9feaff; stroke-dasharray: 8 5; }
+.sunward-view-title { fill: #f2fbff; font-size: 18px; font-weight: 760; letter-spacing: .025em; }
+.sunward-corridor-sphere { fill: rgba(121,228,255,.025); stroke: rgba(121,228,255,.38); stroke-width: 2; stroke-dasharray: 7 6; }
+.sunward-corridor-patch { fill: rgba(255,218,103,.3); stroke: #ffda67; stroke-width: 3; filter: drop-shadow(0 0 7px rgba(255,218,103,.35)); }
+.sunward-corridor-patch.disabled { fill: rgba(155,167,180,.1); stroke: #708091; filter: none; }
+.sunward-corridor-patch.blocked { fill: rgba(255,101,119,.3); stroke: #ff6577; }
+.sunward-entry-radius { stroke: rgba(255,242,176,.74); stroke-width: 2; stroke-dasharray: 7 5; pointer-events: none; }
+.corridor-drag-handle.sunward { pointer-events: auto; cursor: grab; }
+.corridor-drag-handle.sunward:active { cursor: grabbing; }
+.corridor-drag-handle.sunward:focus-visible { outline: none; filter: drop-shadow(0 0 8px #fff2a8); }
+.sunward-line-of-sight circle { fill: rgba(2,7,18,.82); stroke: #9feaff; stroke-width: 2; }
+.sunward-line-of-sight circle:last-child { fill: #9feaff; stroke: none; }
+.sunward-actual-entry line { stroke: #65ff9a; stroke-width: 2.5; }
+.sunward-actual-entry circle { fill: #65ff9a; stroke: #e9fff1; stroke-width: 2; }
+.sunward-actual-entry text { fill: #9effbd; font-size: 14px; font-weight: 700; paint-order: stroke; stroke: #020712; stroke-width: 4px; }
+.sunward-actual-entry.warning line { stroke: #ff7182; }
+.sunward-actual-entry.warning circle { fill: #ff7182; }
+.sunward-depth-state rect { fill: rgba(2,9,21,.92); stroke: rgba(166,218,239,.3); stroke-width: 1.5; }
+.sunward-depth-state text { fill: #b8cddd; font-size: 12px; }
+.sunward-depth-state .corridor-legend-title { fill: #eef8ff; font-size: 13px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.hypothetical-target-direction { display: grid; min-height: 310px; place-content: center; gap: 9px; padding: 32px; color: #a9efff; background: radial-gradient(circle at center, rgba(45,198,232,.09), transparent 58%); text-align: center; }
+.hypothetical-target-direction strong { color: #ffe56d; font-size: 1.1rem; }
+.hypothetical-target-direction span { max-width: 660px; color: #9bb5c8; font-size: .76rem; line-height: 1.55; }
 .route-section-list { margin-top: 12px; overflow: hidden; border: 1px solid rgba(121,228,255,.18); border-radius: 18px; color: #dff3ff; background: rgba(3,9,20,.9); box-shadow: 0 22px 65px rgba(0,0,0,.28); }
 .route-project-empty { display: grid; min-height: 220px; place-content: center; gap: 8px; padding: 28px; border: 1px dashed rgba(121,228,255,.3); border-radius: 18px; color: #8fa9bd; text-align: center; background: rgba(3,9,20,.58); }
 .route-project-empty strong { color: #e9f8ff; font-size: 1.15rem; }
@@ -467,6 +490,9 @@ button { font: inherit; }
 .calculation-panel header small { color: #c9a8ff; font-size: .61rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .route-calculation-dialog > header h2 { margin: 4px 0; font-size: 1.28rem; }
 .route-calculation-dialog > header p { margin: 0; color: #8fa8bd; font-size: .7rem; }
+.calculation-dialog-actions { display: flex; align-items: start; gap: 10px; }
+.calculation-dialog-actions label { display: grid; gap: 4px; color: #8199ae; font-size: .57rem; }
+.calculation-dialog-actions select { width: min(430px, 42vw); padding: 7px 27px 7px 9px; border: 1px solid rgba(181,133,255,.32); border-radius: 8px; color: #e9ddff; background: #0a1324; font-size: .63rem; }
 .route-calculation-content { display: grid; gap: 14px; overflow: auto; padding: 16px 20px 22px; }
 .calculation-funnel { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr) auto) minmax(0, 1fr); align-items: center; gap: 8px; }
 .calculation-funnel > article { display: grid; place-items: center; min-height: 72px; padding: 9px; border: 1px solid rgba(181,133,255,.22); border-radius: 13px; background: rgba(139,92,246,.07); text-align: center; }
@@ -490,15 +516,21 @@ button { font: inherit; }
 .calculation-tick { fill: #6f879c; font-size: 11px; }
 .calculation-point { stroke: rgba(255,255,255,.56); stroke-width: 1.4; fill: #ffd966; cursor: pointer; transition: r .16s ease, filter .16s ease; }
 .calculation-point.is-success { fill: #73f2ac; }
+.calculation-point.is-geometry-valid { fill: #79e4ff; }
+.calculation-point.is-performance-valid { fill: #73f2ac; }
 .calculation-point.is-rejected { fill: #ffb45e; }
 .calculation-point.is-error { fill: #ff607c; }
 .calculation-point.is-running { fill: #79e4ff; }
 .calculation-point.is-selected { stroke: #fff; stroke-width: 2.5; filter: drop-shadow(0 0 6px rgba(201,168,255,.9)); }
 .calculation-point:focus-visible { outline: none; stroke: #fff; stroke-width: 3; }
 .calculation-route-path { fill: none; stroke: #b98dff; stroke-width: 2.2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 5px rgba(139,92,246,.5)); }
+.calculation-route-warning { margin: 0; padding: 7px 9px; border-left: 3px solid #ffb45e; color: #ffc98b; background: rgba(255,145,43,.07); font-size: .62rem; }
+.calculation-route-hypothetical { margin: 0; padding: 7px 9px; border-left: 3px solid #79e4ff; color: #a9efff; background: rgba(45,198,232,.07); font-size: .62rem; }
 .calculation-empty { display: grid; place-items: center; min-height: 210px; margin: 0; color: #71899e; font-size: .7rem; }
 .calculation-status { display: inline-flex; align-items: center; width: max-content; padding: 3px 7px; border: 1px solid rgba(255,255,255,.14); border-radius: 999px; color: #acc0d1; font-size: .56rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .calculation-status.is-success { border-color: rgba(115,242,172,.38); color: #8ff6bd; background: rgba(40,199,111,.08); }
+.calculation-status.is-geometry-valid { border-color: rgba(121,228,255,.4); color: #8deaff; background: rgba(45,198,232,.08); }
+.calculation-status.is-performance-valid { border-color: rgba(115,242,172,.38); color: #8ff6bd; background: rgba(40,199,111,.08); }
 .calculation-status.is-rejected { border-color: rgba(255,180,94,.38); color: #ffc27b; background: rgba(255,145,43,.08); }
 .calculation-status.is-error { border-color: rgba(255,96,124,.4); color: #ff9bad; background: rgba(255,69,98,.08); }
 .calculation-status.is-running { border-color: rgba(121,228,255,.4); color: #8deaff; background: rgba(45,198,232,.08); }
@@ -995,6 +1027,10 @@ button { font: inherit; }
   .constellation-result-select { flex: 1 1 100%; }
   .constellation-result-select select { flex: 1; min-width: 0; max-width: none; }
   .route-calculation-open-button { flex: 1 1 auto; }
+  .route-calculation-dialog > header { align-items: stretch; flex-direction: column; }
+  .calculation-dialog-actions { justify-content: space-between; }
+  .calculation-dialog-actions label { flex: 1; }
+  .calculation-dialog-actions select { width: 100%; }
   .calculation-funnel { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .calculation-funnel > span { display: none; }
   .calculation-grid { grid-template-columns: 1fr; }

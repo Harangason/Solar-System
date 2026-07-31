@@ -9,7 +9,7 @@ Der Python-Backendcode ist nach Verantwortlichkeiten gegliedert:
 | `planner/` | Routenplanung, mehrteilige Routen und Startfensteroptimierung |
 | `solver/` | Trajektorien, N-Body-Propagation und Ephemeriden |
 | `models/` | Fachmodelle für Antrieb, Satellit und Himmelskörper |
-| `services/` | Persistenz, Aktivitätsprotokoll und Berechnungsaudits |
+| `services/` | Projekt- und Berechnungspersistenz, Aktivitaetsprotokoll und Audits |
 | `visualization/` | Serverseitige 2D-Darstellung und Daten für die 3D-Ansicht |
 | `ai/` | AI-Agenten, Schemas, Evaluation und Audit |
 | `web/` | React-/Three.js-Frontend |

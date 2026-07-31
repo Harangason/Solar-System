@@ -376,6 +376,7 @@ export function App() {
           {viewMode === '2d'
             ? (
               <TwoDView
+                projectId={projectId}
                 routeSections={routeSections}
                 onRouteSectionsChange={updateRouteSections}
                 activeRouteSectionId={activeRouteSectionId}
@@ -384,6 +385,7 @@ export function App() {
                 plannedRoute={plannedRoute}
                 onApplyPlannedSolution={applyPlannedSolution}
                 missionConfig={missionConfig}
+                onOpenThreeD={() => setViewMode('3d')}
               />
             )
             : (

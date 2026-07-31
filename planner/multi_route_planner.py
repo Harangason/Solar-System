@@ -39,23 +39,14 @@ from solver.trajectory import (
 )
 from visualization.view_3d_celestials import PLANET_DATA
 from planner.generic_route_planner import parse_route_passage, simulate_generic_route_sections
+from planner.interstellar_targets import (
+    INTERSTELLAR_ROUTE_TARGETS,
+    interstellar_direction as _interstellar_direction,
+)
 
 
 SUN_MASS_KG = MU_SUN / G_KM3_KG_S2
 MAX_LOCAL_PROPAGATION_DAYS = 800.0
-
-# J2000 catalog directions for the stellar systems offered by the 2D route
-# wizard.  A stellar destination is an asymptotic direction, not another body
-# whose centre could be reached with a solar-system Lambert leg.
-INTERSTELLAR_ROUTE_TARGETS = {
-    "proxima-centauri": ("Proxima Centauri", 217.43, -62.68),
-    "alpha-centauri": ("Alpha Centauri A/B", 219.90, -60.83),
-    "epsilon-eridani": ("Epsilon Eridani", 53.23, -9.46),
-    "ross-128": ("Ross 128", 176.94, 0.80),
-    "trappist-1": ("TRAPPIST-1", 346.62, -5.04),
-    "55-cancri": ("55 Cancri", 133.15, 28.33),
-}
-
 
 def _planet_records(planet_id: str) -> tuple[tuple, tuple]:
     ephemeris = next((row for row in PLANET_EPHEMERIDES if row[0] == planet_id), None)
@@ -74,25 +65,6 @@ def _sphere_of_influence_km(ephemeris: tuple, planet_data: tuple) -> float:
 def _transfer_duration_seconds(origin_radius_km: float, target_radius_km: float) -> float:
     transfer_semi_major_axis = (origin_radius_km + target_radius_km) / 2
     return pi * sqrt(transfer_semi_major_axis**3 / MU_SUN)
-
-
-def _interstellar_direction(target_id: str) -> tuple | None:
-    record = INTERSTELLAR_ROUTE_TARGETS.get(target_id)
-    if record is None:
-        return None
-    _, right_ascension_deg, declination_deg = record
-    right_ascension = right_ascension_deg * pi / 180
-    declination = declination_deg * pi / 180
-    obliquity = 23.43928 * pi / 180
-    equatorial_x = cos(declination) * cos(right_ascension)
-    equatorial_y = cos(declination) * sin(right_ascension)
-    equatorial_z = sin(declination)
-    # ECLIPJ2000 convention used by the propagator: x=width, y=depth, z=height.
-    return _normalize((
-        equatorial_x,
-        equatorial_y * cos(obliquity) + equatorial_z * sin(obliquity),
-        -equatorial_y * sin(obliquity) + equatorial_z * cos(obliquity),
-    ))
 
 
 def _desired_departure_direction(
@@ -691,13 +663,13 @@ def classify_route_sections(raw_sections: object) -> dict:
             "reason": "unknown-or-nonplanet-target",
             "unknownTargets": unknown_targets,
         }
-    if first_origin != "sun":
-        return {"solver": "generic", "reason": "freely-selected-origin"}
     if has_terminal_interstellar_asymptote:
         return {
-            "solver": "coupled-interstellar",
-            "reason": "solar-planet-chain-with-terminal-asymptote",
+            "solver": "generic",
+            "reason": "terminal-hypothetical-50-au-asymptote",
         }
+    if first_origin != "sun":
+        return {"solver": "generic", "reason": "freely-selected-origin"}
     if has_non_direct_passage:
         return {
             "solver": "generic",

@@ -19,6 +19,8 @@ import {
 import { ROUTE_INTERSTELLAR_SYSTEMS } from '../interstellarTargets'
 import type { RoutePassageDirection } from '../routeSections'
 import type { MoonData, PlanetData, SunData } from '../types'
+import type { Vector3Tuple } from '../targetAlignedProjection'
+import { SunwardCorridorView } from './SunwardCorridorView'
 
 interface PlanetCorridorPlannerProps {
   planets: PlanetData[]
@@ -36,9 +38,11 @@ interface PlanetCorridorPlannerProps {
   onDeltaVPlusChange: (value: number) => void
   sectionNumber: number
   passageDirection?: RoutePassageDirection
+  sunToTargetDirection?: Vector3Tuple | null
+  actualEntryDirection?: Vector3Tuple | null
 }
 
-type CorridorProjection = CorridorMainProjection
+type CorridorProjection = CorridorMainProjection | 'sunward'
 
 const CANVAS_WIDTH = 1000
 const CANVAS_HEIGHT = 620
@@ -109,13 +113,18 @@ export function PlanetCorridorPlanner({
   onDeltaVPlusChange,
   sectionNumber,
   passageDirection = 'prograde',
+  sunToTargetDirection = null,
+  actualEntryDirection = null,
 }: PlanetCorridorPlannerProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const dragging = useRef(false)
   const mainProjection = definition.mainProjection ?? 'side'
   const [projection, setProjection] = useState<CorridorProjection>(mainProjection)
   const isTopProjection = projection === 'top'
+  const isSideProjection = projection === 'side'
+  const isSunwardProjection = projection === 'sunward'
   const isMainProjection = projection === mainProjection
+  const isInterstellarTarget = ROUTE_INTERSTELLAR_SYSTEMS.some((system) => system.id === waypointId)
   const selectedTarget = waypointId === 'sun'
     ? sun
     : planets.find((planet) => planet.id === waypointId)
@@ -318,29 +327,29 @@ export function PlanetCorridorPlanner({
         </label>
         <label className="corridor-enable">
           <span>Zielkorridor verwenden</span>
-          <input type="checkbox" checked={definition.enabled} onChange={(event) => commitDefinitionChange((current) => ({ ...current, enabled: event.target.checked }))} />
+          <input type="checkbox" checked={definition.enabled && !isInterstellarTarget} disabled={isInterstellarTarget} onChange={(event) => commitDefinitionChange((current) => ({ ...current, enabled: event.target.checked }))} />
         </label>
         <label>
           <span>Bogenbreite ±</span>
-          <input type="range" min="1" max="70" step="1" value={definition.horizontalHalfAngleDeg} onChange={(event) => commitDefinitionChange((current) => ({ ...current, horizontalHalfAngleDeg: event.target.valueAsNumber, enabled: true }))} />
+          <input type="range" min="1" max="70" step="1" value={definition.horizontalHalfAngleDeg} disabled={isInterstellarTarget} onChange={(event) => commitDefinitionChange((current) => ({ ...current, horizontalHalfAngleDeg: event.target.valueAsNumber, enabled: true }))} />
           <output>{definition.horizontalHalfAngleDeg.toFixed(0)}°</output>
         </label>
         <label>
-          <span>Position {isTopProjection ? 'x–y' : 'x–z'}</span>
+          <span>Position {isSunwardProjection ? 'Querebene' : isTopProjection ? 'x–y' : 'x–z'}</span>
           <input
             type="range"
             min="-180"
             max="180"
             step="1"
             value={projectionAngleDeg}
-            disabled={!isMainProjection}
+            disabled={!isMainProjection || isInterstellarTarget}
             onChange={(event) => setProjectionAngle(event.target.valueAsNumber)}
           />
           <output>{projectionAngleDeg.toFixed(0)}°</output>
         </label>
         <label>
           <span>Min/Max-Spanne ±</span>
-          <input type="range" min="1" max="30" step="1" value={definition.verticalHalfAngleDeg} onChange={(event) => commitDefinitionChange((current) => ({ ...current, verticalHalfAngleDeg: event.target.valueAsNumber, enabled: true }))} />
+          <input type="range" min="1" max="30" step="1" value={definition.verticalHalfAngleDeg} disabled={isInterstellarTarget} onChange={(event) => commitDefinitionChange((current) => ({ ...current, verticalHalfAngleDeg: event.target.valueAsNumber, enabled: true }))} />
           <output>{definition.verticalHalfAngleDeg.toFixed(0)}°</output>
         </label>
         <label>
@@ -356,14 +365,14 @@ export function PlanetCorridorPlanner({
       </div>
 
       <p className="corridor-instruction">
-        Ein gemeinsamer räumlicher Zielkorridor: Nur die Main-Ansicht bearbeitet seine Position, die zweite Ansicht zeigt dieselben 3D-Koordinaten als Projektion.
+        Ein gemeinsamer räumlicher Zielkorridor: Seite, Draufsicht und der Blick von der Sonne verwenden dieselben 3D-Koordinaten.
       </p>
 
       <div className="corridor-projection-switcher" role="group" aria-label="Korridoransicht">
-        <div className={!isTopProjection ? 'corridor-projection-option active' : 'corridor-projection-option'}>
+        <div className={isSideProjection ? 'corridor-projection-option active' : 'corridor-projection-option'}>
           <button
             type="button"
-            aria-pressed={!isTopProjection}
+            aria-pressed={isSideProjection}
             onClick={() => setProjection('side')}
           >
             Seitenansicht · x–z
@@ -402,8 +411,20 @@ export function PlanetCorridorPlanner({
             Main
           </label>
         </div>
+        <div className={isSunwardProjection ? 'corridor-projection-option active' : 'corridor-projection-option'}>
+          <button
+            type="button"
+            aria-pressed={isSunwardProjection}
+            disabled={!sunToTargetDirection || isInterstellarTarget || waypointId === 'sun'}
+            onClick={() => setProjection('sunward')}
+          >
+            Von der Sonne · Querebene
+          </button>
+        </div>
         <span className={isMainProjection ? 'projection-mode-badge main' : 'projection-mode-badge'}>
-          {isMainProjection
+          {isSunwardProjection
+            ? 'Zielbezogen · bearbeitbar'
+            : isMainProjection
             ? 'Main · bearbeitbar'
             : projectionTouchesObject
               ? 'Nur Ansicht · Projektion auf dem Zielkörper'
@@ -411,15 +432,42 @@ export function PlanetCorridorPlanner({
         </span>
       </div>
 
-      <div className={`corridor-feasibility-status ${feasibility.blocked ? 'blocked' : 'clear'}`} role="status">
+      {!isInterstellarTarget && <div className={`corridor-feasibility-status ${feasibility.blocked ? 'blocked' : 'clear'}`} role="status">
         <strong>{feasibility.blocked ? 'Zielkorridor gesperrt' : 'Zielkorridor frei'}</strong>
         <span>
           {feasibility.blocked
             ? feasibility.reasons.join(' ')
             : `${clearanceLabel} wird eingehalten.`}
         </span>
-      </div>
+      </div>}
 
+      {isInterstellarTarget
+        ? (
+          <div className="hypothetical-target-direction" role="status">
+            <strong>{selectedTarget?.name ?? waypointId} bleibt hypothetisch</strong>
+            <span>Keine lokale Ephemeride, kein Zielkörper und kein lokaler Zielkorridor. Dargestellt wird ausschließlich der räumliche Richtungsstrahl mit 50 AE.</span>
+          </div>
+        )
+        : isSunwardProjection && sunToTargetDirection
+          ? (
+            <SunwardCorridorView
+              targetName={selectedTarget?.name ?? waypointId}
+              targetColor={targetColor}
+              definition={definition}
+              sunToTargetDirection={sunToTargetDirection}
+              actualEntryDirection={actualEntryDirection}
+              corridorRadiusRatio={feasibility.corridorRadiusRatio}
+              safetyRadiusRatio={feasibility.safetyRadiusRatio}
+              blocked={feasibility.blocked}
+              sectionNumber={sectionNumber}
+              onCenterDirectionChange={(centerDirection) => commitDefinitionChange((current) => ({
+                ...current,
+                centerDirection,
+                enabled: true,
+              }))}
+            />
+          )
+          : (
       <svg
         ref={svgRef}
         className={`planet-corridor-canvas${isMainProjection ? '' : ' readonly'}`}
@@ -593,6 +641,7 @@ export function PlanetCorridorPlanner({
           <text x="58" y="119">Erreichbarer Δv-Fächer</text>
         </g>
       </svg>
+          )}
     </div>
   )
 }

@@ -11,12 +11,27 @@ Lauf reproduziert und ein Fehler einer eindeutig benannten Modellgrenze
 zugeordnet werden kann. Zu jedem erfolgreichen Lauf wird zusätzlich ein
 Datensatz in `logs/route_calculations.jsonl` geschrieben.
 
-Die Berechnung ist in vier physikalische Segmente getrennt:
+Die Planung trennt logische Route, ideale Geometrie und physikalische
+Leistungsbewertung. Die Reihenfolge ist verbindlich:
 
-1. Erde bis Solar-Oberth-Manöver,
-2. heliozentrischer Lambert-Transfer bis zur Einflusssphäre des Wegpunktes,
-3. planetenzentrierte hyperbolische Swing-by-Bahn,
-4. heliozentrischer Ausflug und asymptotischer Zielkurs.
+1. Nutzerabschnitte als geordnete Route erfassen, zum Beispiel
+   `Erde -> Sonne -> Jupiter`.
+2. Mit dem Linienmodell einen breiten zeitlichen Konstellationsraum bewerten.
+3. Jeden expliziten Abschnitt ohne Antriebsranking propagieren und Zieltreffer,
+   Zeitrichtung, Abschnittsreihenfolge, Zustandskontinuitaet und Kollisionen
+   pruefen.
+4. Bei Zwischenzielen Eintritt, Passagebogen und Austritt zum Folgeobjekt
+   geometrisch bestimmen.
+5. Erst fuer die vollstaendige geometrisch gueltige Kette erforderliche
+   Geschwindigkeitsaenderungen und Antriebsgrenzen bewerten.
+
+Kein Abschnitt darf aufgrund eines bekannten Startkoerpers stillschweigend
+entfernt werden. Ein energetisch unmoeglicher Kandidat bleibt als Diagnose
+gespeichert, wird aber weder als Loesung uebernommen noch als flugfaehig
+bezeichnet.
+
+Die spaetere physikalische Kette kann dabei insbesondere aus Solartransfer,
+Lambert-Transfer, lokaler Passage und heliozentrischem Ausflug bestehen.
 
 Die zentrale Implementierung liegt in `planner/route_planner.py`,
 `planner/generic_route_planner.py`, `planner/multi_route_planner.py`,
@@ -143,10 +158,23 @@ konfigurierte Budget geprüft. Damit bleibt beispielsweise ein Eintritt über
 Jupiters Nordpol (`+z`) auch für den anschließenden Abschnitt Jupiter–Saturn
 eine echte dreidimensionale Randbedingung.
 
+Bei `calculationStage: geometry` ist ein deaktivierter Korridor keine
+verdeckte Richtungsfestlegung. Der Planner waehlt einen natuerlichen
+Anflugpunkt. Fuer einen Sonnenanflug wird die nahezu gegenueberliegende
+Perihelseite mit einer kleinen tangentialen Komponente aus dem Anflugzustand
+verwendet, damit der Transferbogen nicht kollinear entartet. Ein idealer
+Passagebogen wird in dieser Stufe nicht durch das konfigurierte Delta-v-Budget
+verformt; sein erforderliches Delta-v wird erst danach bewertet.
+
 Ist der letzte Abschnitt interstellar, wird er nicht als Lambert-Flug zum
 Sternzentrum missverstanden. Er ist eine richtungsgebundene ECLIPJ2000-
-Asymptote; zur Darstellung wird der am letzten Fly-by entstandene Zustand unter
-Sonnengravitation weiterpropagiert.
+Asymptote ohne lokale Ephemeride. Fuer die Visualisierung erzeugt der generische
+Planner ab dem letzten realen Austrittszustand einen geraden Katalogstrahl von
+exakt `50 AE`. Dieser Abschnitt hat keine Sternankunftszeit, keine lokale
+Passage und kein eigenes Delta-v-Soll. `hypothetical`, `noLocalEphemeris` und
+`visualizationDistanceAu` kennzeichnen diese Modellgrenze im Ergebnis. Die
+physikalische Flugfaehigkeit der realen Teilroute und die hypothetische
+Zielrichtung bleiben getrennte Aussagen.
 
 Die Laplace-Einflusssphäre wird angenähert durch
 
@@ -275,6 +303,19 @@ Zielpfad, ersetzt aber nicht diese numerische Freigabe.
   konstante Maßstäbe, weil Planet und SOI nicht gleichzeitig sichtbar wären.
 - Kalman-Resultate beschreiben Navigationsunsicherheit, nicht die Unsicherheit
   des physikalischen Modells oder der Ephemeriden.
+
+### Zielorientierte Querebene
+
+Fuer die lokale Querebene wird am berechneten Begegnungszeitpunkt der
+normalisierte heliozentrische Zielvektor als Blickachse verwendet. Zwei dazu
+orthogonale Einheitsvektoren bilden Quer- und Hochachse. Skalarprodukte des
+Korridor- oder Eintrittsvektors mit diesen drei Basisvektoren liefern
+Bildschirmposition und Tiefe. Die inverse Linearkombination rekonstruiert
+wieder denselben globalen `(x,y,z)`-Einheitsvektor.
+
+Diese Querebene wird nur fuer lokale Himmelskoerper mit Ephemeride gebildet.
+Interstellare Katalogrichtungen bleiben hypothetische 50-AE-Strahlen und
+definieren keinen lokalen Eintrittskorridor am Exosystem.
 
 ## 10. Auswertung des JSONL-Protokolls
 

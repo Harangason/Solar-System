@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 
 type SystemCameraView = 'perspective' | 'top' | 'front' | 'side'
-export type FocusedCameraView = SystemCameraView | 'sun-behind' | 'cross-axis'
+export type FocusedCameraView = SystemCameraView | 'sun-to-target' | 'sun-behind' | 'cross-axis'
 
 export type CameraFocusRequest =
   | { kind: 'overview'; view: SystemCameraView; requestId: number }
@@ -53,12 +53,13 @@ function getFocusedViewDirection(view: FocusedCameraView, focusPosition: THREE.V
     return FOCUSED_VIEW_DIRECTIONS[view as SystemCameraView].clone()
   }
 
-  // Radial axis: Sun (scene origin) -> focused object. From farther out on
-  // this axis the Sun is behind the selected planet. The cross view is
-  // constructed exactly perpendicular to the same axis.
+  // Radial axis: Sun (scene origin) -> focused object. A camera on the
+  // negative radial side looks from the Sun toward the target; the positive
+  // side puts the Sun behind the selected planet.
   const radialDirection = focusPosition.clone()
   if (radialDirection.lengthSq() < 1e-8) radialDirection.set(1, 0, 0)
   radialDirection.normalize()
+  if (view === 'sun-to-target') return radialDirection.multiplyScalar(-1)
   if (view === 'sun-behind') return radialDirection
 
   const crossAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), radialDirection)

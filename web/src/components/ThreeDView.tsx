@@ -898,7 +898,21 @@ export function ThreeDView({
       }))
       return
     }
-    if (view !== 'sun-behind' && view !== 'cross-axis') showSystemOverview(view)
+    if (view !== 'sun-to-target' && view !== 'sun-behind' && view !== 'cross-axis') {
+      showSystemOverview(view)
+      return
+    }
+    const routeTargetPlanet = data?.planets.find((planet) => planet.id === waypointId)
+      ?? selectedPlanet
+    if (routeTargetPlanet) {
+      setCameraFocusRequest((current) => ({
+        kind: 'planet',
+        planetId: routeTargetPlanet.id,
+        view,
+        preserveDistance: false,
+        requestId: current.requestId + 1,
+      }))
+    }
   }
   const focusRouteWaypoint = () => {
     if (!routePlanNodes) return
@@ -1886,6 +1900,13 @@ export function ThreeDView({
           <button type="button" onClick={() => showCameraView('top')}>Draufsicht</button>
           <button type="button" onClick={() => showCameraView('front')}>Vorderansicht</button>
           <button type="button" onClick={() => showCameraView('side')}>Seitenansicht</button>
+          <button
+            type="button"
+            aria-pressed={cameraFocusRequest.kind !== 'overview' && cameraFocusRequest.view === 'sun-to-target'}
+            onClick={() => showCameraView('sun-to-target')}
+          >
+            Von Sonne zum Ziel
+          </button>
           <button
             type="button"
             disabled={cameraFocusRequest.kind === 'overview'}

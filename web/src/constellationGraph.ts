@@ -16,9 +16,23 @@ export interface ConstellationSearchWindow {
   searchEndDay: number
   broadStepDays: number
   longestRelevantPeriodDays: number
+  targetBroadSamples: number
 }
 
-export function constellationSearchWindow(orbitalPeriodsDays: number[]): ConstellationSearchWindow {
+export interface ConstellationSearchBudget {
+  geometricShortlistLimit: number
+  preflightSolverBudget: number
+  fullValidationBudget: number
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.max(minimum, Math.min(maximum, value))
+}
+
+export function constellationSearchWindow(
+  orbitalPeriodsDays: number[],
+  routeSectionCount = 1,
+): ConstellationSearchWindow {
   const relevantPeriods = orbitalPeriodsDays.filter((periodDays) => periodDays > 0)
   const longestRelevantPeriodDays = Math.max(YEAR_DAYS, ...relevantPeriods)
   const searchStartDay = -Math.min(730, Math.ceil(longestRelevantPeriodDays / 2))
@@ -26,15 +40,55 @@ export function constellationSearchWindow(orbitalPeriodsDays: number[]): Constel
     Math.ceil(60 * YEAR_DAYS),
     Math.max(Math.ceil(20 * YEAR_DAYS), Math.ceil(longestRelevantPeriodDays * 2.15)),
   )
-  const broadStepDays = Math.min(30, Math.max(10, Math.round(searchEndDay / 900)))
-  return { searchStartDay, searchEndDay, broadStepDays, longestRelevantPeriodDays }
+  const targetBroadSamples = clamp(
+    1_800 + relevantPeriods.length * 600 + Math.max(1, routeSectionCount) * 500,
+    2_400,
+    12_000,
+  )
+  const searchSpanDays = searchEndDay - searchStartDay
+  const broadStepDays = clamp(Math.round(searchSpanDays / targetBroadSamples), 1, 14)
+  return {
+    searchStartDay,
+    searchEndDay,
+    broadStepDays,
+    longestRelevantPeriodDays,
+    targetBroadSamples,
+  }
+}
+
+export function constellationSearchBudget(
+  geometricNodeCount: number,
+  routeSectionCount: number,
+): ConstellationSearchBudget {
+  const routeComplexity = Math.max(1, routeSectionCount)
+  const geometricShortlistLimit = clamp(
+    Math.ceil(Math.sqrt(Math.max(1, geometricNodeCount)) * 0.7) + routeComplexity * 4,
+    24,
+    72,
+  )
+  const preflightSolverBudget = clamp(
+    geometricShortlistLimit * 2 + routeComplexity * 12,
+    72,
+    192,
+  )
+  const fullValidationBudget = clamp(
+    Math.ceil(geometricShortlistLimit / 3) + routeComplexity * 2,
+    12,
+    32,
+  )
+  return { geometricShortlistLimit, preflightSolverBudget, fullValidationBudget }
 }
 
 export function buildTemporalCandidateGraph<T extends TemporalGraphCandidate>(
   candidates: T[],
   neighborSpan = 2,
 ): TemporalGraph<T> {
-  const nodes = [...candidates].sort((left, right) => left.timestamp - right.timestamp)
+  const bestByTimestamp = new Map<number, T>()
+  for (const candidate of candidates) {
+    const current = bestByTimestamp.get(candidate.timestamp)
+    if (!current || candidate.score > current.score) bestByTimestamp.set(candidate.timestamp, candidate)
+  }
+  const nodes = [...bestByTimestamp.values()].sort((left, right) => left.timestamp - right.timestamp)
   const neighbors = new Map<number, Array<{ timestamp: number; costDays: number }>>()
   for (const node of nodes) neighbors.set(node.timestamp, [])
 
@@ -97,16 +151,15 @@ export function selectDiverseGraphCandidates<T extends TemporalGraphCandidate>(
   const ranked = (localPeaks.length > 0 ? localPeaks : graph.nodes)
     .sort((left, right) => right.score - left.score)
   const selected: T[] = []
-  const selectedDistances: Array<Map<number, number>> = []
+  const minimumSeparationMs = minimumSeparationDays * DAY_MS
 
   for (const candidate of ranked) {
     if (
-      selectedDistances.every((distances) => (
-        (distances.get(candidate.timestamp) ?? Number.POSITIVE_INFINITY) >= minimumSeparationDays
+      selected.every((other) => (
+        Math.abs(other.timestamp - candidate.timestamp) >= minimumSeparationMs
       ))
     ) {
       selected.push(candidate)
-      selectedDistances.push(dijkstraTemporalDistances(graph, candidate.timestamp))
     }
     if (selected.length >= limit) break
   }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import {
   buildTemporalCandidateGraph,
+  constellationSearchBudget,
   constellationSearchWindow,
   dijkstraTemporalDistances,
   selectDiverseGraphCandidates,
@@ -55,6 +56,17 @@ assert.ok(earthWindow.searchEndDay >= 20 * 365)
 const jupiterWindow = constellationSearchWindow([365.25, 4332.59])
 assert.ok(jupiterWindow.searchEndDay >= 2 * 4332.59)
 assert.ok(jupiterWindow.searchEndDay > 2920)
-assert.ok(jupiterWindow.broadStepDays <= 30)
+assert.ok(jupiterWindow.broadStepDays <= 14)
+const jupiterSampleCount = Math.floor(
+  (jupiterWindow.searchEndDay - jupiterWindow.searchStartDay) / jupiterWindow.broadStepDays,
+) + 1
+assert.ok(jupiterSampleCount >= 2400)
+
+const smallBudget = constellationSearchBudget(1000, 1)
+const complexBudget = constellationSearchBudget(4000, 3)
+assert.ok(smallBudget.geometricShortlistLimit >= 24)
+assert.ok(complexBudget.geometricShortlistLimit > smallBudget.geometricShortlistLimit)
+assert.ok(complexBudget.preflightSolverBudget > complexBudget.geometricShortlistLimit)
+assert.ok(complexBudget.fullValidationBudget >= 12)
 
 console.log('constellation graph consistency: ok')

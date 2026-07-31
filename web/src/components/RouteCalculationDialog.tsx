@@ -1,6 +1,12 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 
-export type RouteCalculationCandidateStatus = 'running' | 'success' | 'rejected' | 'error'
+export type RouteCalculationCandidateStatus =
+  | 'running'
+  | 'geometry-valid'
+  | 'performance-valid'
+  | 'success'
+  | 'rejected'
+  | 'error'
 
 export interface RouteCalculationCandidateTrace {
   id: string
@@ -12,6 +18,11 @@ export interface RouteCalculationCandidateTrace {
   message?: string
   geometricScore: number
   quality?: number
+  geometryValid?: boolean
+  endpointsReached?: boolean
+  maximumEndpointResidualKm?: number
+  performanceEvaluated?: boolean
+  hypotheticalInterstellarAsymptote?: boolean
   feasible?: boolean
   corridorSatisfied?: boolean
   collisionFree?: boolean
@@ -44,18 +55,37 @@ export interface RouteCalculationTrace {
   error?: string
 }
 
+export interface RouteCalculationRunSummary {
+  runId: string
+  routeLabel: string
+  status: string
+  startedAtUtc: string
+}
+
 interface RouteCalculationDialogProps {
   trace: RouteCalculationTrace
+  availableRuns: RouteCalculationRunSummary[]
+  historyLoading: boolean
+  onRunSelect: (runId: string) => void
   onClose: () => void
 }
 
 const STAGE_NAMES: Record<string, string> = {
-  'basin-preflight': 'Vorprüfung',
+  'basin-preflight': 'Geometrische Vorprüfung',
   'graph-refinement-level-1': 'Nachsuche E1',
   'graph-refinement-level-2': 'Nachsuche E2',
   'graph-refinement-level-3': 'Nachsuche E3',
   'graph-refinement-level-4': 'Nachsuche E4',
-  'corridor-full-validation': 'Korridor-Vollprüfung',
+  'corridor-full-validation': 'Geometrische Wegpunktprüfung',
+}
+
+const STATUS_NAMES: Record<RouteCalculationCandidateStatus, string> = {
+  running: 'läuft',
+  'geometry-valid': 'geometrisch gültig',
+  'performance-valid': 'flugfähig',
+  success: 'erfolgreich',
+  rejected: 'verworfen',
+  error: 'Fehler',
 }
 
 function finite(value: number | undefined): value is number {
@@ -71,6 +101,7 @@ function stageName(stage: string) {
 }
 
 function candidateDeficit(candidate: RouteCalculationCandidateTrace) {
+  if (!candidate.performanceEvaluated) return undefined
   if (
     !finite(candidate.requiredInjectionDeltaVKmS)
     || !finite(candidate.availableInjectionDeltaVKmS)
@@ -164,7 +195,13 @@ function CandidateQualityPlot({
   )
 }
 
-export function RouteCalculationDialog({ trace, onClose }: RouteCalculationDialogProps) {
+export function RouteCalculationDialog({
+  trace,
+  availableRuns,
+  historyLoading,
+  onRunSelect,
+  onClose,
+}: RouteCalculationDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const [stageFilter, setStageFilter] = useState('all')
   const [selectedId, setSelectedId] = useState('')
@@ -203,6 +240,8 @@ export function RouteCalculationDialog({ trace, onClose }: RouteCalculationDialo
   const requiredDelta = (
     selectedCandidate
     && comparisonCandidate
+    && selectedCandidate.performanceEvaluated
+    && comparisonCandidate.performanceEvaluated
     && finite(selectedCandidate.requiredInjectionDeltaVKmS)
     && finite(comparisonCandidate.requiredInjectionDeltaVKmS)
   )
@@ -225,7 +264,23 @@ export function RouteCalculationDialog({ trace, onClose }: RouteCalculationDialo
           <h2 id="route-calculation-title">Routenberechnungen analysieren</h2>
           <p>{trace.routeLabel}</p>
         </div>
-        <button type="button" className="wizard-close" aria-label="Analyse schließen" onClick={onClose}>×</button>
+        <div className="calculation-dialog-actions">
+          <label>
+            <span>Gespeicherter Lauf</span>
+            <select
+              value={trace.runId}
+              disabled={historyLoading}
+              onChange={(event) => onRunSelect(event.target.value)}
+            >
+              {availableRuns.map((run) => (
+                <option key={run.runId} value={run.runId}>
+                  {new Date(run.startedAtUtc).toLocaleString('de-DE')} · {run.status} · {run.routeLabel}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className="wizard-close" aria-label="Analyse schließen" onClick={onClose}>×</button>
+        </div>
       </header>
 
       <div className="route-calculation-content">
@@ -278,7 +333,7 @@ export function RouteCalculationDialog({ trace, onClose }: RouteCalculationDialo
                 <small>Ausgewählte Variante</small>
                 <h3>{selectedCandidate ? `#${selectedCandidate.iteration} · ${selectedCandidate.date}` : 'Noch keine Variante'}</h3>
               </div>
-              {selectedCandidate ? <span className={`calculation-status is-${selectedCandidate.status}`}>{selectedCandidate.status}</span> : null}
+              {selectedCandidate ? <span className={`calculation-status is-${selectedCandidate.status}`}>{STATUS_NAMES[selectedCandidate.status] ?? selectedCandidate.status}</span> : null}
             </header>
             {selectedRoutePath
               ? (
@@ -289,6 +344,12 @@ export function RouteCalculationDialog({ trace, onClose }: RouteCalculationDialo
                 </svg>
               )
               : <p className="calculation-empty">Für diese Variante ist noch kein Routenverlauf vorhanden.</p>}
+            {selectedCandidate?.hypotheticalInterstellarAsymptote
+              ? <p className="calculation-route-hypothetical">Hypothetische Zielrichtung – gerader Katalogstrahl über 50 AE, ohne lokale Ephemeride oder physikalische Sternankunft.</p>
+              : null}
+            {selectedCandidate?.status === 'rejected' && !selectedCandidate.hypotheticalInterstellarAsymptote
+              ? <p className="calculation-route-warning">Diagnosebahn – diese Variante ist kein gültiges Ergebnis. {selectedCandidate.message ?? ''}</p>
+              : null}
           </article>
         </section>
 
@@ -297,9 +358,11 @@ export function RouteCalculationDialog({ trace, onClose }: RouteCalculationDialo
             <section className="calculation-metrics" aria-label="Kennzahlen der ausgewählten Variante">
               <article><span>Stufe</span><strong>{stageName(selectedCandidate.stage)}</strong></article>
               <article><span>Qualität</span><strong>{metric(selectedCandidate.quality)}</strong></article>
-              <article><span>Δv erforderlich</span><strong>{metric(selectedCandidate.requiredInjectionDeltaVKmS, 2)} km/s</strong></article>
-              <article><span>Δv verfügbar</span><strong>{metric(selectedCandidate.availableInjectionDeltaVKmS, 2)} km/s</strong></article>
-              <article><span>Δv-Defizit</span><strong>{metric(deficit, 2)} km/s</strong></article>
+              <article><span>Geometrie</span><strong>{selectedCandidate.geometryValid === undefined ? 'historischer Lauf' : selectedCandidate.geometryValid ? 'gültig' : 'ungültig'}</strong></article>
+              <article><span>Endpunktrest</span><strong>{metric(selectedCandidate.maximumEndpointResidualKm, 2)} km</strong></article>
+              <article><span>Δv erforderlich</span><strong>{selectedCandidate.performanceEvaluated ? `${metric(selectedCandidate.requiredInjectionDeltaVKmS, 2)} km/s` : 'noch nicht bewertet'}</strong></article>
+              <article><span>Δv verfügbar</span><strong>{selectedCandidate.performanceEvaluated ? `${metric(selectedCandidate.availableInjectionDeltaVKmS, 2)} km/s` : 'noch nicht bewertet'}</strong></article>
+              <article><span>Δv-Defizit</span><strong>{selectedCandidate.performanceEvaluated ? `${metric(deficit, 2)} km/s` : 'noch nicht bewertet'}</strong></article>
               <article><span>Zielrest</span><strong>{metric(selectedCandidate.targetAlignmentDeg)}°</strong></article>
               <article><span>Korridor</span><strong>{selectedCandidate.corridorSatisfied === undefined ? '–' : selectedCandidate.corridorSatisfied ? 'erfüllt' : 'verfehlt'}</strong></article>
               <article><span>Kollision</span><strong>{selectedCandidate.collisionFree === undefined ? '–' : selectedCandidate.collisionFree ? 'frei' : 'Treffer'}</strong></article>
@@ -346,7 +409,7 @@ export function RouteCalculationDialog({ trace, onClose }: RouteCalculationDialo
                   </td>
                   <td>{candidate.date}</td>
                   <td>{stageName(candidate.stage)}</td>
-                  <td><span className={`calculation-status is-${candidate.status}`}>{candidate.status}</span></td>
+                  <td><span className={`calculation-status is-${candidate.status}`}>{STATUS_NAMES[candidate.status] ?? candidate.status}</span></td>
                   <td>{metric(candidate.quality)}</td>
                   <td>{metric(candidate.requiredInjectionDeltaVKmS, 2)}</td>
                   <td>{metric(candidateDeficit(candidate), 2)}</td>

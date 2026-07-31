@@ -54,7 +54,7 @@ class MultiRoutePlannerTests(unittest.TestCase):
         self.assertAlmostEqual(sum(component**2 for component in direction), 1.0)
         self.assertGreater(abs(direction[2]), 0.1)
 
-    def test_terminal_interstellar_asymptote_uses_coupled_solver_with_passage(self):
+    def test_terminal_interstellar_asymptote_uses_hypothetical_generic_solver(self):
         classification = classify_route_sections([
             {
                 "originId": "sun",
@@ -68,13 +68,13 @@ class MultiRoutePlannerTests(unittest.TestCase):
             },
         ])
 
-        self.assertEqual(classification["solver"], "coupled-interstellar")
+        self.assertEqual(classification["solver"], "generic")
         self.assertEqual(
             classification["reason"],
-            "solar-planet-chain-with-terminal-asymptote",
+            "terminal-hypothetical-50-au-asymptote",
         )
 
-    def test_interstellar_summary_reports_calculated_alignment(self):
+    def test_interstellar_summary_marks_hypothetical_direction(self):
         corridor = {
             "enabled": False,
             "centerDirection": [1.0, 0.0, 0.0],
@@ -105,29 +105,13 @@ class MultiRoutePlannerTests(unittest.TestCase):
             ],
         })
 
-        calculated_alignment = result["routeSections"][-1]["lookaheadAlignmentDeg"]
-        self.assertEqual(result["summary"]["targetAlignmentDeg"], calculated_alignment)
-        self.assertEqual(
-            result["summary"]["actualTargetAlignmentDeg"],
-            calculated_alignment,
-        )
-        solar_departure = result["routeSections"][0]
-        self.assertFalse(solar_departure["backtracksFromOuterTarget"])
-        self.assertGreaterEqual(solar_departure["departureRadialSpeedKmS"], -0.02)
-        self.assertLess(solar_departure["requiredTransitionDeltaVKmS"], 100.0)
-        self.assertLessEqual(
-            solar_departure["corridorInsertionDeltaVKmS"],
-            0.5 + 1e-9,
-        )
-        self.assertTrue(result["solarPassage"]["outboundAfterPeriapsis"])
-        self.assertLess(
-            result["solarPassage"]["entryIndex"],
-            result["solarPassage"]["periapsisIndex"],
-        )
-        self.assertLess(
-            result["solarPassage"]["periapsisIndex"],
-            result["solarPassage"]["exitIndex"],
-        )
+        asymptote = result["routeSections"][-1]
+        self.assertEqual(asymptote["sectionType"], "interstellar-asymptote")
+        self.assertTrue(asymptote["hypothetical"])
+        self.assertEqual(asymptote["visualizationDistanceAu"], 50.0)
+        self.assertEqual(result["outgoingDirection"], asymptote["entryDirection"])
+        self.assertEqual(result["summary"]["targetAlignmentDeg"], 0.0)
+        self.assertTrue(result["summary"]["hypotheticalInterstellarAsymptote"])
 
     def test_non_interstellar_explicit_passage_still_uses_generic_solver(self):
         classification = classify_route_sections([

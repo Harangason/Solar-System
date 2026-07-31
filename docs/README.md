@@ -9,6 +9,7 @@ die [Projekt-README](../README.md).
 | Bereich | Dokumentation | Inhalt |
 | --- | --- | --- |
 | Struktur | [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Pakete und Abhaengigkeiten |
+| Datenbank | [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) | Persistierte Berechnungsläufe und Einheiten |
 | Planner | [README_PLANNER.md](README_PLANNER.md) | Routenplanung und Optimierung |
 | Solver | [README_SOLVER.md](README_SOLVER.md) | Numerische Bahnloeser und Ephemeriden |
 | Models | [README_MODELS.md](README_MODELS.md) | Fach- und Antriebsmodelle |

@@ -26,6 +26,7 @@ from solver.trajectory import get_default_mission_config, simulate_mission
 from planner.route_planner import simulate_waypoint_route
 from planner.multi_route_planner import classify_route_sections, simulate_route_sections
 from planner.mission_optimizer import assess_solar_energy, optimize_launch_window
+from services.calculation_store import CalculationStore
 from services.project_store import ProjectStore
 from ai.audit_log import AI_AUDIT_LOGS, read_latest_ai_audit
 from ai.audio_agent import synthesize_mission_speech, transcribe_mission_audio
@@ -42,11 +43,41 @@ PORT = 5001
 WEB_DIST = Path(__file__).parent / "web" / "dist"
 app = Flask(__name__, static_folder=None)
 project_store = ProjectStore()
+calculation_store = CalculationStore(project_store.database_path)
 
 
 def _project_id(values: dict | None = None) -> str:
     values = values or {}
     return str(values.get("projectId") or request.headers.get("X-Project-Id") or "")
+
+
+def _calculation_persistence(values: dict | None) -> dict:
+    values = values or {}
+    metadata = values.get("calculationPersistence")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _record_route_variant(
+    values: dict,
+    *,
+    result: dict | None,
+    status: str,
+    error_message: str = "",
+) -> str:
+    metadata = _calculation_persistence(values)
+    run_id = str(metadata.get("runId") or "")
+    if not run_id:
+        return ""
+    request_values = dict(values)
+    request_values.pop("calculationPersistence", None)
+    return calculation_store.record_variant(
+        run_id,
+        metadata,
+        request_values,
+        result=result,
+        status=status,
+        error_message=error_message,
+    )
 
 
 def _write_calculation_activity(
@@ -222,6 +253,87 @@ def delete_project(project_id: str):
         return jsonify({"error": str(error)}), 404
 
 
+@app.get("/api/calculations/runs")
+def calculation_runs():
+    try:
+        runs = calculation_store.list_runs(
+            project_id=str(request.args.get("projectId") or _project_id()),
+            limit=int(request.args.get("limit", 25)),
+        )
+    except (TypeError, ValueError) as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify({"runs": runs})
+
+
+@app.post("/api/calculations/runs")
+def start_calculation_run():
+    values = request.get_json(silent=True) or {}
+    try:
+        run = calculation_store.start_run(values, project_id=_project_id(values))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except LookupError as error:
+        return jsonify({"error": str(error)}), 404
+    return jsonify(run), 201
+
+
+@app.get("/api/calculations/runs/<run_id>")
+def load_calculation_run(run_id: str):
+    try:
+        run = calculation_store.get_run(run_id)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except LookupError as error:
+        return jsonify({"error": str(error)}), 404
+    return jsonify(run)
+
+
+@app.patch("/api/calculations/runs/<run_id>")
+def update_calculation_run(run_id: str):
+    values = request.get_json(silent=True) or {}
+    try:
+        run = calculation_store.update_run(run_id, values)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except LookupError as error:
+        return jsonify({"error": str(error)}), 404
+    return jsonify(run)
+
+
+@app.delete("/api/calculations/runs/<run_id>")
+def delete_calculation_run(run_id: str):
+    try:
+        calculation_store.delete_run(run_id)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except LookupError as error:
+        return jsonify({"error": str(error)}), 404
+    return "", 204
+
+
+@app.get("/api/calculations/variants/<variant_id>")
+def load_calculation_variant(variant_id: str):
+    try:
+        variant = calculation_store.get_variant(variant_id)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except LookupError as error:
+        return jsonify({"error": str(error)}), 404
+    return jsonify(variant)
+
+
+@app.patch("/api/calculations/runs/<run_id>/variants/<variant_id>")
+def update_calculation_variant(run_id: str, variant_id: str):
+    values = request.get_json(silent=True) or {}
+    try:
+        variant = calculation_store.update_variant(run_id, variant_id, values)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except LookupError as error:
+        return jsonify({"error": str(error)}), 404
+    return jsonify(variant)
+
+
 @app.post("/api/mission/simulate")
 def mission_simulation():
     started_at = perf_counter()
@@ -272,6 +384,12 @@ def waypoint_route_simulation():
         else:
             result = simulate_waypoint_route(values)
     except ValueError as error:
+        variant_id = _record_route_variant(
+            values,
+            result=None,
+            status="rejected",
+            error_message=str(error),
+        )
         _write_calculation_activity(
             "route-simulate",
             started_at,
@@ -283,8 +401,16 @@ def waypoint_route_simulation():
                 "rejectionKind": "structural-or-constraint",
             },
         )
-        return jsonify({"error": str(error)}), 400
+        return jsonify(
+            {"error": str(error), "calculationVariantId": variant_id}
+        ), 400
     except RuntimeError as error:
+        variant_id = _record_route_variant(
+            values,
+            result=None,
+            status="error",
+            error_message=str(error),
+        )
         _write_calculation_activity(
             "route-simulate",
             started_at,
@@ -296,7 +422,14 @@ def waypoint_route_simulation():
                 "rejectionKind": "numerical",
             },
         )
-        return jsonify({"error": str(error)}), 422
+        return jsonify(
+            {"error": str(error), "calculationVariantId": variant_id}
+        ), 422
+    variant_id = _record_route_variant(
+        values,
+        result=result if isinstance(result, dict) else None,
+        status="solver-completed",
+    )
     _write_calculation_activity(
         "route-simulate",
         started_at,
@@ -305,6 +438,16 @@ def waypoint_route_simulation():
         result=result,
         details=route_classification,
     )
+    if variant_id and isinstance(result, dict):
+        return jsonify(
+            {
+                **result,
+                "calculationPersistence": {
+                    "runId": _calculation_persistence(values).get("runId"),
+                    "variantId": variant_id,
+                },
+            }
+        )
     return jsonify(result)
 
 

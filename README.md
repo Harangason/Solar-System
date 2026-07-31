@@ -69,8 +69,13 @@ Die lokale SQLite-Datei unter `data/` ist bewusst nicht Bestandteil von Git.
 
 ## Datenhaltung und Rechennachweis
 
-`services/project_store.py` verwaltet versionierte Projektsnapshots in einer lokalen
-SQLite-Datenbank. Die API bietet:
+`services/project_store.py` verwaltet versionierte Projektsnapshots in einer
+lokalen SQLite-Datenbank. `services/calculation_store.py` persistiert jeden
+dynamischen Solverlauf, seine Varianten, Delta-v-Werte, Geschwindigkeiten und
+Trajektorienpunkte in normalisierten UUID-Tabellen. Das Schema ist in
+[`docs/DATABASE_SCHEMA.md`](docs/DATABASE_SCHEMA.md) beschrieben.
+
+Die Projekt-API bietet:
 
 ```text
 GET    /api/projects
@@ -85,6 +90,10 @@ Sie enthalten Eingaben, verwendete Modelle, Zustandsuebergaenge,
 Delta-v-Anforderungen, Kollisionsreserven und Zielereignisse. Die Dateien
 unter `logs/` bleiben lokale Laufzeitdaten und werden nicht nach Git
 uebernommen.
+
+Die JSONL-Dateien dienen weiterhin als lineare Auditspur. Die SQLite-Tabellen
+sind die persistierte, durchsuchbare Quelle fuer Varianten und das
+Analyse-Popup.
 
 ## SPICE-Ephemeriden
 
@@ -867,7 +876,9 @@ Die technisch gesetzten Formeln der README liegen als SVG in
 ## API und Audit
 
 Die Simulationen werden ueber Flask-Endpunkte aufgerufen. Erfolgreiche
-Routenberechnungen koennen in JSONL-Auditdateien protokolliert werden:
+Routenberechnungen werden normalisiert in SQLite gespeichert und koennen
+zusaetzlich in JSONL-Auditdateien protokolliert werden. Die
+Berechnungslauf-API beginnt unter `/api/calculations/runs`.
 
 ```text
 logs/route_calculations.jsonl

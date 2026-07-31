@@ -9,4 +9,6 @@ server.log
 server-error.log
 server-ai.log
 server-ai-error.log
+server-persistence.log
+server-persistence-error.log
 .env.local

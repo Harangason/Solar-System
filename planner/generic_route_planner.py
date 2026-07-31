@@ -23,6 +23,11 @@ from planner.route_planner import (
     _propagate_lambert_segment,
     _subtract,
 )
+from planner.interstellar_targets import (
+    HYPOTHETICAL_ASYMPTOTE_DISTANCE_AU,
+    INTERSTELLAR_ROUTE_TARGETS,
+    interstellar_direction,
+)
 from solver.trajectory import (
     AU_KM,
     DAY_SECONDS,
@@ -480,6 +485,7 @@ def _local_passage(
     entry_radius: float,
     entry_position: tuple,
     arrival_velocity: tuple,
+    geometry_only: bool = False,
 ) -> dict:
     passage = section["passage"]
     if passage["mode"] == "direct":
@@ -504,7 +510,17 @@ def _local_passage(
     direction_sign = 1.0 if passage["orbitDirection"] == "prograde" else -1.0
     target_mu = target.mass_kg * G_KM3_KG_S2
     circular_speed = sqrt(target_mu / entry_radius) if target_mu > 0 else incoming_speed
-    passage_speed = max(0.01, min(max(incoming_speed, circular_speed), incoming_speed + section["deltaVPlusKmS"]))
+    # During route geometry the ideal arc must not be distorted by the
+    # configured propulsion budget.  The required impulse is still measured,
+    # but feasibility is evaluated only after every requested section reaches
+    # its target in one continuous chain.
+    passage_speed = max(0.01, max(incoming_speed, circular_speed)) if geometry_only else max(
+        0.01,
+        min(
+            max(incoming_speed, circular_speed),
+            incoming_speed + section["deltaVPlusKmS"],
+        ),
+    )
     selected_angle_deg, exit_angle_selection = _targeted_passage_angle_deg(
         passage=passage,
         target=target,
@@ -581,6 +597,7 @@ def _local_passage(
 def simulate_generic_route_sections(values: dict | None) -> dict:
     values = values or {}
     raw_sections = values.get("routeSections")
+    geometry_only = str(values.get("calculationStage") or "") == "geometry"
     if not isinstance(raw_sections, list) or not raw_sections:
         raise ValueError("Mindestens ein 2D-Routenabschnitt ist erforderlich.")
     catalog = _catalog()
@@ -591,9 +608,15 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             raise ValueError(f"Routenabschnitt {index + 1} ist ungültig.")
         origin_id = str(raw.get("originId") or "")
         target_id = str(raw.get("targetId") or "")
+        stellar_record = INTERSTELLAR_ROUTE_TARGETS.get(target_id)
         if origin_id not in catalog:
             raise ValueError(f"Ursprung '{origin_id}' besitzt keine lokale Ephemeride.")
-        if target_id not in catalog:
+        if stellar_record is not None and index != len(raw_sections) - 1:
+            raise ValueError(
+                f"Interstellares Richtungsziel '{target_id}' darf nur der letzte "
+                "Routenabschnitt sein."
+            )
+        if target_id not in catalog and stellar_record is None:
             raise ValueError(f"Ziel '{target_id}' besitzt keine lokale Ephemeride.")
         if origin_id == target_id:
             raise ValueError(f"Abschnitt {index + 1} verbindet ein Objekt mit sich selbst.")
@@ -611,7 +634,8 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
         parsed.append({
             "id": str(raw.get("id") or f"route-section-{index + 1}"),
             "origin": catalog[origin_id],
-            "target": catalog[target_id],
+            "target": catalog.get(target_id),
+            "interstellarTargetId": target_id if stellar_record is not None else None,
             "corridor": _parse_entry_corridor(raw_corridor),
             "passage": parse_route_passage(raw.get("passage")),
             "deltaVPlusKmS": max(0.0, float(raw.get("deltaVPlusKmS", 0.0))),
@@ -625,10 +649,14 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
     first_origin = parsed[0]["origin"]
     first_target = parsed[0]["target"]
     origin_position, origin_velocity = _body_state(first_origin, epoch_days, catalog)
-    target_position, _ = _body_state(first_target, epoch_days, catalog)
-    initial_direction = _normalize(_subtract(target_position, origin_position))
-    if first_origin.kind == "sun":
-        initial_direction = _normalize(target_position)
+    first_stellar_id = parsed[0]["interstellarTargetId"]
+    if first_stellar_id is not None:
+        initial_direction = interstellar_direction(first_stellar_id)
+    else:
+        target_position, _ = _body_state(first_target, epoch_days, catalog)
+        initial_direction = _normalize(_subtract(target_position, origin_position))
+        if first_origin.kind == "sun":
+            initial_direction = _normalize(target_position)
     start_position = _add(
         origin_position,
         tuple(component * _parking_radius(first_origin) for component in initial_direction),
@@ -642,11 +670,91 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
     segments = []
     calculated = []
     total_delta_v = 0.0
+    hypothetical_asymptote_direction = None
 
     for index, section in enumerate(parsed):
         origin = section["origin"]
         target = section["target"]
         corridor = section["corridor"]
+        stellar_target_id = section["interstellarTargetId"]
+        if stellar_target_id is not None:
+            stellar_record = INTERSTELLAR_ROUTE_TARGETS[stellar_target_id]
+            direction = interstellar_direction(stellar_target_id)
+            segment_start_index = len(trajectory) - 1
+            visualization_length_km = HYPOTHETICAL_ASYMPTOTE_DISTANCE_AU * AU_KM
+            endpoint = _add(
+                start_position,
+                tuple(component * visualization_length_km for component in direction),
+            )
+            trajectory.append({
+                "elapsedDays": start_day,
+                "positionKm": list(endpoint),
+                "velocityKmS": list(start_velocity),
+                "phase": "HYPOTHETICAL_INTERSTELLAR_ASYMPTOTE",
+            })
+            endpoint_index = len(trajectory) - 1
+            calculated.append({
+                "id": section["id"],
+                "originId": origin.id,
+                "targetId": stellar_target_id,
+                "targetName": stellar_record[0],
+                "sectionType": "interstellar-asymptote",
+                "hypothetical": True,
+                "visualizationDistanceAu": HYPOTHETICAL_ASYMPTOTE_DISTANCE_AU,
+                "noLocalEphemeris": True,
+                "transferStartIndex": segment_start_index,
+                "entryIndex": endpoint_index,
+                "periapsisIndex": endpoint_index,
+                "exitIndex": endpoint_index,
+                "entryDay": start_day,
+                "periapsisDay": start_day,
+                "exitDay": start_day,
+                "entryPositionKm": list(endpoint),
+                "entryDirection": list(direction),
+                "entryLatitudeDeg": atan2(
+                    direction[2], sqrt(direction[0] ** 2 + direction[1] ** 2)
+                ) * 180 / pi,
+                "exitPositionKm": list(endpoint),
+                "exitVelocityKmS": list(start_velocity),
+                "minimumAltitudeKm": 0.0,
+                "sphereOfInfluenceRadiusKm": 0.0,
+                "requiredTransitionDeltaVKmS": 0.0,
+                "requiredPassageDeltaVKmS": 0.0,
+                "requiredSectionDeltaVKmS": 0.0,
+                "corridorInsertionDeltaVKmS": 0.0,
+                "entryVelocityPreserved": True,
+                "lookaheadTargetId": None,
+                "lookaheadAlignmentDeg": 0.0,
+                "predictedPassiveTurnDeg": 0.0,
+                "passage": section["passage"],
+                "requestedPassageAngleDeg": 0.0,
+                "selectedPassageAngleDeg": 0.0,
+                "corridor": {
+                    "enabled": corridor["enabled"],
+                    "centerDirection": list(direction),
+                    "horizontalHalfAngleDeg": corridor["horizontalHalfAngleDeg"],
+                    "verticalHalfAngleDeg": corridor["verticalHalfAngleDeg"],
+                    "rotationDeg": corridor["rotationDeg"],
+                    "actualHorizontalOffsetDeg": 0.0,
+                    "actualVerticalOffsetDeg": 0.0,
+                    "entryInsideCorridor": True,
+                    "exitDirection": list(direction),
+                    "passageSignedAngleDeg": 0.0,
+                    "exitAngleSelection": None,
+                },
+                "relativeTrajectory": [],
+                "lambertEndpointResidualKm": 0.0,
+                "lambertVelocityResidualKmS": 0.0,
+            })
+            segments.append({
+                "id": f"{section['id']}-hypothetical-50-au",
+                "label": f"Hypothetische Richtung -> {stellar_record[0]} (50 AE)",
+                "startIndex": segment_start_index,
+                "endIndex": endpoint_index,
+            })
+            start_position = endpoint
+            hypothetical_asymptote_direction = direction
+            continue
         central = _local_central_body(origin, target, catalog)
         gravitational_parameter = (
             central.mass_kg * G_KM3_KG_S2 if central is not None else MU_SUN
@@ -679,6 +787,34 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             if central is not None else ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
         )
         direction = _normalize(tuple(corridor["centerDirection"]))
+        if not corridor["enabled"]:
+            # A disabled corridor means that geometry may choose the natural
+            # near-side entry point.  Reusing an arbitrary editor direction
+            # here can introduce a huge plane change before the user has
+            # constrained the passage at all.
+            natural_approach = _subtract(start_position, arrival_target_position)
+            if target.kind == "sun" and _magnitude(frame_start) > 1e-9:
+                inward = tuple(-component for component in _normalize(frame_start))
+                tangential_velocity = _subtract(
+                    frame_velocity,
+                    tuple(
+                        _dot(frame_velocity, inward) * component
+                        for component in inward
+                    ),
+                )
+                tangent = (
+                    _normalize(tangential_velocity)
+                    if _magnitude(tangential_velocity) > 1e-9
+                    else _normalize(_cross((0.0, 0.0, 1.0), inward))
+                )
+                direction = _normalize(
+                    tuple(
+                        inward[index] + 0.04 * tangent[index]
+                        for index in range(3)
+                    )
+                )
+            elif _magnitude(natural_approach) > 1e-9:
+                direction = _normalize(natural_approach)
         entry_radius = _entry_radius(target, catalog)
         entry_position = _add(
             arrival_target_position,
@@ -755,6 +891,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             entry_radius=entry_radius,
             entry_position=entry_position,
             arrival_velocity=arrival_velocity,
+            geometry_only=geometry_only,
         )
         if passage_result["trajectory"]:
             trajectory.extend(passage_result["trajectory"][1:])
@@ -795,7 +932,12 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             "corridorInsertionDeltaVKmS": passage_delta_v,
             "entryVelocityPreserved": passage_delta_v < 1e-9,
             "lookaheadTargetId": (
-                parsed[index + 1]["target"].id if index + 1 < len(parsed) else None
+                (
+                    parsed[index + 1]["target"].id
+                    if parsed[index + 1]["target"] is not None
+                    else parsed[index + 1]["interstellarTargetId"]
+                )
+                if index + 1 < len(parsed) else None
             ),
             "lookaheadAlignmentDeg": 0.0,
             "predictedPassiveTurnDeg": 0.0,
@@ -889,6 +1031,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
     )
     return {
         "startDate": start_date,
+        "calculationStage": "geometry" if geometry_only else "performance",
         "totalFlightDays": start_day,
         "warnings": warnings,
         "trajectory": trajectory,
@@ -934,7 +1077,9 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             "actualEntryPositionKm": focus["entryPositionKm"],
             "entryInsideCorridor": True,
         },
-        "outgoingDirection": list(_normalize(final_velocity)),
+        "outgoingDirection": list(
+            hypothetical_asymptote_direction or _normalize(final_velocity)
+        ),
         "summary": {
             "flybyMode": "multi-section",
             "requiredInjectionDeltaVKmS": first["requiredTransitionDeltaVKmS"],
@@ -966,6 +1111,13 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             "observationWindowHours": 0.0,
             "targetAlignmentDeg": 0.0,
             "feasibleWithConfiguredBurn": feasible_with_configured_burn,
+            "hypotheticalInterstellarAsymptote": (
+                hypothetical_asymptote_direction is not None
+            ),
+            "interstellarVisualizationDistanceAu": (
+                HYPOTHETICAL_ASYMPTOTE_DISTANCE_AU
+                if hypothetical_asymptote_direction is not None else None
+            ),
             "entryCorridorTargeted": first_definition["corridor"]["enabled"],
             "entryInsideCorridor": True,
             "warnings": warnings,

@@ -2,7 +2,7 @@ import unittest
 
 from generic_route_planner import SUN_RADIUS_KM, _candidate, parse_route_passage
 from multi_route_planner import simulate_route_sections
-from trajectory import _magnitude
+from trajectory import AU_KM, _magnitude
 
 
 CORRIDOR = {
@@ -154,6 +154,77 @@ class GenericRoutePlannerTests(unittest.TestCase):
         self.assertGreater(
             result["validation"]["minimumSolarAltitudeKm"], 0.0
         )
+
+    def test_geometry_stage_preserves_complete_user_route_before_performance(self):
+        inbound = section("earth", "sun", "earth-sun")
+        inbound["deltaVPlusKmS"] = 0.01
+        inbound["corridor"] = {**CORRIDOR, "enabled": False}
+        inbound["passage"] = {
+            "mode": "partial-orbit",
+            "orbitAngleDeg": 1,
+            "orbitDirection": "prograde",
+        }
+        outbound = section("sun", "jupiter", "sun-jupiter")
+        outbound["deltaVPlusKmS"] = 0.01
+        outbound["corridor"] = {**CORRIDOR, "enabled": False}
+
+        result = simulate_route_sections({
+            "mission": {"startDate": "2033-12-31"},
+            "waypointId": "jupiter",
+            "calculationStage": "geometry",
+            "routeSections": [inbound, outbound],
+        })
+
+        self.assertEqual(result["calculationStage"], "geometry")
+        self.assertEqual(
+            [(item["originId"], item["targetId"]) for item in result["routeSections"]],
+            [("earth", "sun"), ("sun", "jupiter")],
+        )
+        self.assertTrue(result["stateChain"]["continuousPosition"])
+        self.assertTrue(result["validation"]["collisionFree"])
+        self.assertTrue(all(
+            item["lambertEndpointResidualKm"] < 100.0
+            for item in result["routeSections"]
+        ))
+
+    def test_terminal_interstellar_target_is_a_straight_hypothetical_50_au_ray(self):
+        local_corridor = {**CORRIDOR, "enabled": False}
+        earth_sun = section("earth", "sun", "earth-sun")
+        earth_sun["corridor"] = local_corridor
+        sun_jupiter = section("sun", "jupiter", "sun-jupiter")
+        sun_jupiter["corridor"] = local_corridor
+        jupiter_proxima = section(
+            "jupiter", "proxima-centauri", "jupiter-proxima"
+        )
+        jupiter_proxima["corridor"] = local_corridor
+
+        result = simulate_route_sections({
+            "mission": {"startDate": "2033-12-31"},
+            "calculationStage": "geometry",
+            "routeSections": [earth_sun, sun_jupiter, jupiter_proxima],
+        })
+
+        self.assertEqual(
+            [(item["originId"], item["targetId"]) for item in result["routeSections"]],
+            [
+                ("earth", "sun"),
+                ("sun", "jupiter"),
+                ("jupiter", "proxima-centauri"),
+            ],
+        )
+        asymptote = result["routeSections"][-1]
+        self.assertEqual(asymptote["sectionType"], "interstellar-asymptote")
+        self.assertTrue(asymptote["hypothetical"])
+        self.assertTrue(asymptote["noLocalEphemeris"])
+        self.assertEqual(asymptote["visualizationDistanceAu"], 50.0)
+        ray_start = result["trajectory"][asymptote["transferStartIndex"]]["positionKm"]
+        ray_end = result["trajectory"][asymptote["exitIndex"]]["positionKm"]
+        self.assertAlmostEqual(
+            _magnitude(tuple(end - start for start, end in zip(ray_start, ray_end))),
+            50.0 * AU_KM,
+            delta=1.0,
+        )
+        self.assertTrue(result["summary"]["hypotheticalInterstellarAsymptote"])
 
     def test_unsafe_lambert_fallback_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Kein kollisionsfreier"):
