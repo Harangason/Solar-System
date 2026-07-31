@@ -67,10 +67,98 @@ interface ConstellationSearchResult {
   targetAlignmentDeg: number
 }
 
+interface AiChatMessage {
+  id: string
+  role: 'assistant' | 'user'
+  text: string
+  basedOnSolverRunIds?: string[]
+  proposedActions?: AiProposedAction[]
+  auditRunId?: string
+}
+
+interface AiProposedAction {
+  type: 'focus-route-section' | 'set-projection' | 'run-route-solver'
+  sectionId: string | null
+  projection: Projection | null
+  requiresConfirmation: true
+}
+
+interface AiChatResponse {
+  reply: string
+  basedOnSolverRunIds: string[]
+  proposedActions: AiProposedAction[]
+  auditRunId: string
+  model: string
+  error?: string
+}
+
+interface AiPlausibilityFinding {
+  code: string
+  message: string
+  severity: 'info' | 'warning' | 'error'
+  sourceRefs?: string[]
+}
+
+interface AiPlausibilityReport {
+  reportId: string
+  solverRunId: string
+  status: 'pass' | 'warning' | 'fail'
+  findings: AiPlausibilityFinding[]
+  requiredFixes: string[]
+  displaySafe: boolean
+  auditRunId: string
+  error?: string
+}
+
+interface AiCalculationSeed {
+  startDate: string
+  encounterDay: number | null
+  routeMode: 'gravity-assist' | 'solar-oberth' | 'direct' | 'hybrid'
+  priority: number
+  rationale: string
+  routeSectionIds: string[]
+}
+
+interface AiCalculationWindow {
+  label: string
+  startDate: string
+  endDate: string
+  priority: number
+  reason: string
+}
+
+interface AiCalculationProposal {
+  strategy: 'gravity-assist' | 'solar-oberth' | 'hybrid' | 'corridor-refinement'
+  searchWindows: AiCalculationWindow[]
+  candidateSeeds: AiCalculationSeed[]
+  rejectionHints: string[]
+  expectedImprovement: string
+  basedOnHistoricalRunIds: string[]
+  requiresSolverValidation: true
+}
+
+interface AiCalculationSuggestion {
+  suggestionId: string
+  role: 'calculation'
+  proposal: AiCalculationProposal
+  rationale: string
+  auditRunId: string
+  error?: string
+}
+
 const EXTENT = 30
 const SIDE_HALF_HEIGHT = EXTENT * 7 / 16
 const SIDE_LABEL_Y = [-6.6, 6.5, -4.7, 4.6, -2.8, 2.7, -7.9, 7.8]
 const INTERSTELLAR_PLOT_DISTANCE = EXTENT * 0.96
+const AI_CHAT_SUGGESTIONS = [
+  'Was sollte ich am Zielkorridor pruefen?',
+  'Wie verbessere ich diese Route?',
+  'Erklaere mir die aktuelle Ansicht.',
+]
+
+function missionDateAfterDays(startDate: string, elapsedDays: number) {
+  return new Date(new Date(`${startDate}T00:00:00Z`).getTime() + elapsedDays * 86_400_000).toISOString().slice(0, 10)
+}
 
 function project(position: THREE.Vector3, projection: OrbitalProjection): [number, number] {
   const [x, y, z] = [position.x, position.y, position.z]
@@ -336,8 +424,34 @@ export function TwoDView({
   const [constellationSearchRunning, setConstellationSearchRunning] = useState(false)
   const [constellationResults, setConstellationResults] = useState<ConstellationSearchResult[]>([])
   const [selectedConstellationResultId, setSelectedConstellationResultId] = useState('')
+  const [aiChatInput, setAiChatInput] = useState('')
+  const [aiChatLoading, setAiChatLoading] = useState(false)
+  const [aiChatError, setAiChatError] = useState('')
+  const [aiRecording, setAiRecording] = useState(false)
+  const [aiAudioStatus, setAiAudioStatus] = useState('')
+  const [aiSpeechMessageId, setAiSpeechMessageId] = useState<string | null>(null)
+  const [aiPlausibilityReport, setAiPlausibilityReport] = useState<AiPlausibilityReport | null>(null)
+  const [aiPlausibilityLoading, setAiPlausibilityLoading] = useState(false)
+  const [aiPlausibilityError, setAiPlausibilityError] = useState('')
+  const [aiCalculationSuggestion, setAiCalculationSuggestion] = useState<AiCalculationSuggestion | null>(null)
+  const [aiCalculationLoading, setAiCalculationLoading] = useState(false)
+  const [aiCalculationError, setAiCalculationError] = useState('')
+  const [aiCalculationBiasActive, setAiCalculationBiasActive] = useState(false)
+  const [aiChatMessages, setAiChatMessages] = useState<AiChatMessage[]>([
+    {
+      id: 'assistant-welcome',
+      role: 'assistant',
+      text: 'Ich bin die Interaktions-KI fuer diese 2D-Planung. Konkrete Missionswerte nenne ich nur mit Bezug auf einen vorhandenen Solver-Lauf.',
+    },
+  ])
   const searchRunningRef = useRef(false)
   const orbitPlotRef = useRef<HTMLDivElement>(null)
+  const aiRecorderRef = useRef<MediaRecorder | null>(null)
+  const aiRecordingChunksRef = useRef<Blob[]>([])
+  const aiRecordingStreamRef = useRef<MediaStream | null>(null)
+  const aiPlaybackRef = useRef<HTMLAudioElement | null>(null)
+  const aiPlaybackUrlRef = useRef('')
+  const aiPlausibilityRunRef = useRef('')
   const previousOrbitZoomRef = useRef(orbitZoom)
   const previousProjectionRef = useRef(projection)
   const orbitPanRef = useRef({
@@ -396,6 +510,12 @@ export function TwoDView({
     return () => controller.abort()
   }, [])
 
+  useEffect(() => () => {
+    aiRecordingStreamRef.current?.getTracks().forEach((track) => track.stop())
+    aiPlaybackRef.current?.pause()
+    if (aiPlaybackUrlRef.current) URL.revokeObjectURL(aiPlaybackUrlRef.current)
+  }, [])
+
   const activeDate = plannedRoute?.startDate ?? plannedMissionDate ?? new Date(todayTimestampMs).toISOString().slice(0, 10)
   const timestampMs = useMemo(
     () => new Date(`${activeDate}T00:00:00Z`).getTime(),
@@ -418,6 +538,338 @@ export function TwoDView({
     [moonCatalogue, selectedPlanet],
   )
   const activeRouteSection = routeSections.find((section) => section.id === activeRouteSectionId) ?? routeSections[0]
+  const projectionLabel = projection === 'corridor'
+    ? 'Zielkorridor'
+    : projection === 'side'
+      ? 'Kantenansicht'
+      : 'Draufsicht'
+  const missionStateForAi = () => ({
+    schemaVersion: '1.0',
+    startDate: activeDate,
+    originId: routeSections[0]?.originId ?? activeRouteSection?.originId ?? 'earth',
+    targetId: routeSections[routeSections.length - 1]?.targetId ?? activeRouteSection?.targetId ?? 'earth',
+    waypointIds: routeSections.map((section) => section.targetId),
+    routeSections,
+    constraints: {
+      maxDeltaVKmS: routeSections.reduce(
+        (sum, section) => sum + section.deltaVMinusKmS + section.deltaVPlusKmS,
+        0,
+      ),
+      maxDurationDays: missionConfig ? missionConfig.missionYears * 365.25 : null,
+      minimumConfidencePct: null,
+    },
+    solverRunId: plannedRoute?.audit?.runId ?? null,
+  })
+  const solverResultForAi = () => {
+    if (!plannedRoute?.audit?.runId) return null
+    const solverValid = Boolean(
+      plannedRoute.summary.feasibleWithConfiguredBurn
+      && plannedRoute.validation?.collisionFree !== false
+      && plannedRoute.highFidelityNBody?.collision !== true,
+    )
+    const warnings = [
+      ...(plannedRoute.warnings ?? []),
+      ...(plannedRoute.summary.warnings ?? []),
+    ]
+    return {
+      schemaVersion: '1.0',
+      runId: plannedRoute.audit.runId,
+      solverType: 'segmented-route',
+      status: solverValid ? 'success' : 'best-effort',
+      missionStateRef: null,
+      result: {
+        startDate: plannedRoute.startDate,
+        totalFlightDays: plannedRoute.totalFlightDays,
+        summary: plannedRoute.summary,
+        waypoint: plannedRoute.waypoint ? {
+          id: plannedRoute.waypoint.id,
+          encounterDay: plannedRoute.waypoint.encounterDay,
+          encounterDate: missionDateAfterDays(plannedRoute.startDate, plannedRoute.waypoint.encounterDay),
+        } : null,
+        routeSections: plannedRoute.routeSections?.map((section) => ({
+          id: section.id,
+          originId: section.originId,
+          targetId: section.targetId,
+          entryInsideCorridor: section.corridor.entryInsideCorridor,
+          requiredTransitionDeltaVKmS: section.requiredTransitionDeltaVKmS,
+          corridorInsertionDeltaVKmS: section.corridorInsertionDeltaVKmS,
+        })) ?? [],
+      },
+      validation: {
+        solverValid,
+        nBodyValid: plannedRoute.highFidelityNBody
+          ? plannedRoute.highFidelityNBody.converged && plannedRoute.highFidelityNBody.collision !== true
+          : null,
+        errors: solverValid ? [] : ['Der Solver hat keine Flugfreigabe erteilt.'],
+        warnings,
+      },
+    }
+  }
+  const uiStateForPlausibility = () => {
+    if (!plannedRoute) return {}
+    const solverValid = Boolean(
+      plannedRoute.summary.feasibleWithConfiguredBurn
+      && plannedRoute.validation?.collisionFree !== false
+      && plannedRoute.highFidelityNBody?.collision !== true,
+    )
+    return {
+      displayedSolverRunId: plannedRoute.audit?.runId ?? null,
+      projection,
+      activeRouteSectionId,
+      routeSectionIds: routeSections.map((section) => section.id),
+      displayedFlightReady: solverValid,
+      displayedStartDate: plannedRoute.startDate,
+      displayedOptimizedStartDate: plannedRoute.startDate,
+      displayedTotalFlightDays: plannedRoute.totalFlightDays,
+      displayedEncounterDay: plannedRoute.waypoint?.encounterDay ?? null,
+      displayedEncounterDate: plannedRoute.waypoint
+        ? missionDateAfterDays(plannedRoute.startDate, plannedRoute.waypoint.encounterDay)
+        : null,
+      displayedRouteTargetId: plannedRoute.routeSections?.at(-1)?.targetId ?? null,
+      nBodyVisible: Boolean(plannedRoute.highFidelityNBody),
+      routeSectionCount: routeSections.length,
+    }
+  }
+  const runPlausibilityCheck = async () => {
+    const solverResult = solverResultForAi()
+    if (!solverResult || aiPlausibilityLoading) return
+    setAiPlausibilityLoading(true)
+    setAiPlausibilityError('')
+    try {
+      const response = await fetch('/api/ai/plausibility-check', {
+        method: 'POST',
+        headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          missionState: missionStateForAi(),
+          solverResult,
+          uiState: uiStateForPlausibility(),
+        }),
+      })
+      const payload = await response.json() as AiPlausibilityReport | { error?: string }
+      if (!response.ok || !('status' in payload)) {
+        throw new Error(payload.error || `Plausibilitaetspruefung antwortet mit HTTP ${response.status}.`)
+      }
+      setAiPlausibilityReport(payload)
+    } catch (reason) {
+      setAiPlausibilityError(reason instanceof Error ? reason.message : 'Plausibilitaetspruefung fehlgeschlagen.')
+    } finally {
+      setAiPlausibilityLoading(false)
+    }
+  }
+  const recentSolverHistoryForAi = () => constellationResults.slice(0, 12).map((result) => ({
+    id: result.id,
+    date: result.date,
+    quality: result.quality,
+    flightReady: result.flightReady,
+    deltaVDeficitKmS: Math.max(
+      0,
+      result.requiredInjectionDeltaVKmS
+        + result.targetCorrectionDeltaVKmS
+        - result.availableInjectionDeltaVKmS,
+    ) + result.corridorInsertionDeficitKmS,
+    targetAlignmentDeg: result.targetAlignmentDeg,
+    corridorSatisfied: result.corridorSatisfied,
+    collisionFree: result.collisionFree,
+  }))
+  const requestCalculationSuggestion = async () => {
+    if (aiCalculationLoading || routeSections.length === 0) return
+    setAiCalculationLoading(true)
+    setAiCalculationError('')
+    try {
+      const response = await fetch('/api/ai/calculation-suggest', {
+        method: 'POST',
+        headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          missionState: missionStateForAi(),
+          solverResult: solverResultForAi(),
+          uiState: uiStateForPlausibility(),
+          recentSolverHistory: recentSolverHistoryForAi(),
+        }),
+      })
+      const payload = await response.json() as AiCalculationSuggestion | { error?: string }
+      if (!response.ok || !('proposal' in payload)) {
+        throw new Error(payload.error || `Berechnungs-KI antwortet mit HTTP ${response.status}.`)
+      }
+      setAiCalculationSuggestion(payload)
+      setAiCalculationBiasActive(false)
+    } catch (reason) {
+      setAiCalculationError(reason instanceof Error ? reason.message : 'Berechnungs-KI konnte keinen Suchraum vorschlagen.')
+    } finally {
+      setAiCalculationLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    const runId = plannedRoute?.audit?.runId ?? ''
+    if (!runId || aiPlausibilityRunRef.current === runId) return
+    aiPlausibilityRunRef.current = runId
+    void runPlausibilityCheck()
+  }, [plannedRoute?.audit?.runId])
+
+  const sendAiChatMessage = async (message = aiChatInput) => {
+    const trimmedMessage = message.trim()
+    if (!trimmedMessage || aiChatLoading) return
+    const timestamp = Date.now().toString(36)
+    const userMessage: AiChatMessage = { id: `user-${timestamp}`, role: 'user', text: trimmedMessage }
+    const history = aiChatMessages
+      .filter((item) => item.id !== 'assistant-welcome')
+      .map((item) => ({ role: item.role, content: item.text }))
+      .slice(-12)
+    setAiChatMessages((current) => [...current, userMessage].slice(-12))
+    setAiChatInput('')
+    setAiChatError('')
+    setAiChatLoading(true)
+    try {
+      const response = await fetch('/api/ai/mission-chat', {
+        method: 'POST',
+        headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          message: trimmedMessage,
+          history,
+          missionState: missionStateForAi(),
+          solverResult: solverResultForAi(),
+          viewState: { projection, activeRouteSectionId },
+        }),
+      })
+      const payload = await response.json() as AiChatResponse | { error?: string }
+      if (!response.ok || !('reply' in payload)) {
+        throw new Error(payload.error || `KI-Endpunkt antwortet mit HTTP ${response.status}.`)
+      }
+      const assistantMessage: AiChatMessage = {
+        id: `assistant-${timestamp}`,
+        role: 'assistant',
+        text: payload.reply,
+        basedOnSolverRunIds: payload.basedOnSolverRunIds,
+        proposedActions: payload.proposedActions,
+        auditRunId: payload.auditRunId,
+      }
+      setAiChatMessages((current) => [...current, assistantMessage].slice(-12))
+    } catch (reason) {
+      setAiChatError(reason instanceof Error ? reason.message : 'Die Interaktions-KI konnte nicht antworten.')
+    } finally {
+      setAiChatLoading(false)
+    }
+  }
+  const stopAiRecording = () => {
+    const recorder = aiRecorderRef.current
+    if (recorder && recorder.state !== 'inactive') recorder.stop()
+  }
+  const startAiRecording = async () => {
+    if (aiRecording || aiChatLoading) return
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setAiChatError('Audioaufnahme wird von diesem Browser nicht unterstuetzt.')
+      return
+    }
+    setAiChatError('')
+    setAiAudioStatus('')
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : ''
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      aiRecorderRef.current = recorder
+      aiRecordingStreamRef.current = stream
+      aiRecordingChunksRef.current = []
+      recorder.addEventListener('dataavailable', (event) => {
+        if (event.data.size > 0) aiRecordingChunksRef.current.push(event.data)
+      })
+      recorder.addEventListener('stop', () => {
+        const recordingMimeType = recorder.mimeType || mimeType || 'audio/webm'
+        const audioBlob = new Blob(aiRecordingChunksRef.current, { type: recordingMimeType })
+        stream.getTracks().forEach((track) => track.stop())
+        aiRecorderRef.current = null
+        aiRecordingStreamRef.current = null
+        setAiRecording(false)
+        void transcribeAiRecording(audioBlob)
+      })
+      recorder.start()
+      setAiRecording(true)
+      setAiAudioStatus('Aufnahme laeuft...')
+    } catch (reason) {
+      aiRecordingStreamRef.current?.getTracks().forEach((track) => track.stop())
+      aiRecorderRef.current = null
+      aiRecordingStreamRef.current = null
+      setAiRecording(false)
+      setAiChatError(reason instanceof Error ? reason.message : 'Mikrofon konnte nicht gestartet werden.')
+    }
+  }
+  const transcribeAiRecording = async (audioBlob: Blob) => {
+    if (audioBlob.size === 0) {
+      setAiChatError('Die Audioaufnahme ist leer.')
+      setAiAudioStatus('')
+      return
+    }
+    setAiAudioStatus('Sprache wird transkribiert...')
+    setAiChatError('')
+    try {
+      const formData = new FormData()
+      formData.append('audio', audioBlob, 'mission-chat.webm')
+      const response = await fetch('/api/ai/transcribe', {
+        method: 'POST',
+        headers: activityRequestHeaders(),
+        body: formData,
+      })
+      const payload = await response.json() as { transcript?: string; error?: string }
+      if (!response.ok || !payload.transcript) {
+        throw new Error(payload.error || `Transkription antwortet mit HTTP ${response.status}.`)
+      }
+      setAiChatInput(payload.transcript)
+      setAiAudioStatus('Transkript eingefuegt. Pruefen und senden.')
+    } catch (reason) {
+      setAiChatError(reason instanceof Error ? reason.message : 'Sprache konnte nicht transkribiert werden.')
+      setAiAudioStatus('')
+    }
+  }
+  const speakAiMessage = async (message: AiChatMessage) => {
+    if (aiSpeechMessageId || !message.text.trim()) return
+    setAiSpeechMessageId(message.id)
+    setAiAudioStatus('Antwort wird vorgelesen...')
+    setAiChatError('')
+    try {
+      const response = await fetch('/api/ai/speech', {
+        method: 'POST',
+        headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ text: message.text }),
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({ error: '' })) as { error?: string }
+        throw new Error(payload.error || `Sprachausgabe antwortet mit HTTP ${response.status}.`)
+      }
+      const audioBlob = await response.blob()
+      aiPlaybackRef.current?.pause()
+      if (aiPlaybackUrlRef.current) URL.revokeObjectURL(aiPlaybackUrlRef.current)
+      const audioUrl = URL.createObjectURL(audioBlob)
+      const player = new Audio(audioUrl)
+      aiPlaybackUrlRef.current = audioUrl
+      aiPlaybackRef.current = player
+      player.addEventListener('ended', () => setAiAudioStatus(''))
+      await player.play()
+    } catch (reason) {
+      setAiChatError(reason instanceof Error ? reason.message : 'Sprachausgabe konnte nicht gestartet werden.')
+      setAiAudioStatus('')
+    } finally {
+      setAiSpeechMessageId(null)
+    }
+  }
+  const applyAiAction = (action: AiProposedAction) => {
+    if (action.type === 'focus-route-section' && action.sectionId) {
+      onActiveRouteSectionChange(action.sectionId)
+      return
+    }
+    if (action.type === 'set-projection' && action.projection) {
+      setProjection(action.projection)
+      return
+    }
+    if (action.type === 'run-route-solver') void findBestConstellation()
+  }
+  const aiActionLabel = (action: AiProposedAction) => {
+    if (action.type === 'focus-route-section') return 'Routenabschnitt fokussieren'
+    if (action.type === 'set-projection') return `${action.projection} öffnen`
+    return 'Solver-Suche starten'
+  }
   const previewSection = routeSections.find((section) => section.id === previewSectionId) ?? null
   const previewSectionIndex = previewSection ? routeSections.findIndex((section) => section.id === previewSection.id) : -1
   const previewPreviousSection = previewSectionIndex > 0 ? routeSections[previewSectionIndex - 1] ?? null : null
@@ -477,6 +929,13 @@ export function TwoDView({
     && plannedRoute.routeSections?.every((section) => section.corridor.entryInsideCorridor)
     && plannedRoute.validation?.collisionFree !== false
     && plannedRoute.highFidelityNBody?.collision !== true,
+  )
+  const plannedRoutePlausibilitySafe = Boolean(
+    plannedRouteFlightReady
+    && plannedRoute?.audit?.runId
+    && aiPlausibilityReport?.solverRunId === plannedRoute.audit.runId
+    && aiPlausibilityReport.displaySafe
+    && aiPlausibilityReport.status === 'pass',
   )
   const routeSketchSegments = useMemo(() => {
     if (!data || routeSections.length === 0) return []
@@ -653,6 +1112,36 @@ export function TwoDView({
     searchRunningRef.current = true
     setConstellationSearchRunning(true)
     const base = new Date(`${plannedMissionDate ?? activeDate}T00:00:00Z`).getTime()
+    const aiSeedTimestamps = aiCalculationBiasActive && aiCalculationSuggestion
+      ? aiCalculationSuggestion.proposal.candidateSeeds
+          .map((seed) => ({
+            timestamp: new Date(`${seed.startDate}T00:00:00Z`).getTime(),
+            priority: seed.priority,
+          }))
+          .filter((seed) => Number.isFinite(seed.timestamp))
+      : []
+    const aiWindowCenters = aiCalculationBiasActive && aiCalculationSuggestion
+      ? aiCalculationSuggestion.proposal.searchWindows
+          .map((window) => {
+            const start = new Date(`${window.startDate}T00:00:00Z`).getTime()
+            const end = new Date(`${window.endDate}T00:00:00Z`).getTime()
+            return Number.isFinite(start) && Number.isFinite(end)
+              ? { timestamp: (start + end) / 2, priority: window.priority }
+              : null
+          })
+          .filter((item): item is { timestamp: number; priority: number } => item !== null)
+      : []
+    const aiPriorityBoost = (timestamp: number) => {
+      const anchors = [...aiSeedTimestamps, ...aiWindowCenters]
+      if (anchors.length === 0) return 0
+      return Math.max(
+        0,
+        ...anchors.map((anchor) => {
+          const distanceDays = Math.abs(timestamp - anchor.timestamp) / 86_400_000
+          return anchor.priority * 260 - distanceDays * 3.2
+        }),
+      )
+    }
     const involvedPlanetPeriods = routeSections
       .flatMap((section) => [section.originId, section.targetId])
       .map((bodyId) => data.planets.find((planet) => planet.id === bodyId)?.orbitalPeriodDays ?? 0)
@@ -682,7 +1171,7 @@ export function TwoDView({
       return {
         timestamp,
         ...result,
-        score: result.score - solarPenalty - timePenalty,
+        score: result.score - solarPenalty - timePenalty + aiPriorityBoost(timestamp),
         sections: optimized.sections,
         solarChanges: optimized.changes,
         maxSolarOrbitAngleDeg: optimized.maxOrbitAngleDeg,
@@ -708,9 +1197,14 @@ export function TwoDView({
         searchEndDay,
         longestRelevantPeriodDays,
         graphAlgorithm: 'temporal-weighted-best-first',
+        aiCalculationSuggestionId: aiCalculationBiasActive ? aiCalculationSuggestion?.suggestionId ?? '' : '',
+        aiSeedCount: aiSeedTimestamps.length,
       },
     })
     try {
+      for (const seed of [...aiSeedTimestamps, ...aiWindowCenters]) {
+        evaluate(seed.timestamp)
+      }
       for (let day = searchStartDay; day <= searchEndDay; day += broadStepDays) {
         evaluate(base + day * 86_400_000)
       }
@@ -1283,7 +1777,166 @@ export function TwoDView({
           <p className="eyebrow">Interaktiver Orbitalplaner</p>
           <h1 id="two-d-title">Das Sonnensystem in 2D</h1>
         </div>
-        <p>Reale J2000-Ellipsen und Bahnneigungen zur Ekliptik. Beide Ansichten verwenden dieselbe Epoche und Planetenauswahl.</p>
+        <aside className="ai-chat-panel" aria-label="Interaktiver KI-Chat fuer die 2D-Planung">
+          <header>
+            <span>KI-Chat</span>
+            <small><b className="ai-chat-status">aktiv</b> · {projectionLabel} · {activeRouteSection ? `${activeRouteSection.originId} -> ${activeRouteSection.targetId}` : 'noch keine Route'}</small>
+          </header>
+          <div className="ai-chat-messages" aria-live="polite">
+            {aiChatMessages.map((message) => (
+              <div key={message.id} className={`ai-chat-message ${message.role}`}>
+                <p>{message.text}</p>
+                {message.basedOnSolverRunIds && message.basedOnSolverRunIds.length > 0 && (
+                  <small>Basis: Solver-Lauf {message.basedOnSolverRunIds.join(', ')}</small>
+                )}
+                {message.proposedActions?.map((action, index) => (
+                  <button key={`${action.type}-${index}`} type="button" onClick={() => applyAiAction(action)}>
+                    Vorschlag übernehmen: {aiActionLabel(action)}
+                  </button>
+                ))}
+                {message.role === 'assistant' && (
+                  <button
+                    type="button"
+                    className="ai-chat-speech-button"
+                    disabled={aiSpeechMessageId !== null}
+                    onClick={() => void speakAiMessage(message)}
+                    aria-label="KI-Antwort vorlesen"
+                    title="KI-Antwort vorlesen"
+                  >
+                    Vorlesen
+                  </button>
+                )}
+                {message.auditRunId && <small>KI-Audit: {message.auditRunId}</small>}
+              </div>
+            ))}
+            {aiChatLoading && <div className="ai-chat-message assistant pending">Interaktions-KI antwortet …</div>}
+          </div>
+          {aiChatError && <p className="ai-chat-error" role="alert">{aiChatError}</p>}
+          {aiAudioStatus && <p className="ai-chat-audio-status" aria-live="polite">{aiAudioStatus}</p>}
+          <section
+            className={`ai-plausibility-panel ${aiPlausibilityReport?.status ?? 'idle'}`}
+            aria-label="Plausibilitaetspruefung"
+          >
+            <div>
+              <span>Plausibilitaet</span>
+              <small>
+                {aiPlausibilityLoading
+                  ? 'Pruefung laeuft...'
+                  : aiPlausibilityReport
+                    ? `${aiPlausibilityReport.status} · ${aiPlausibilityReport.displaySafe ? 'anzeigesicher' : 'gesperrt'}`
+                    : 'noch kein Solver-Lauf'}
+              </small>
+            </div>
+            {aiPlausibilityError && <p role="alert">{aiPlausibilityError}</p>}
+            {aiPlausibilityReport && (
+              <>
+                <ul>
+                  {aiPlausibilityReport.findings.slice(0, 3).map((finding) => (
+                    <li key={finding.code}>{finding.message}</li>
+                  ))}
+                </ul>
+                {aiPlausibilityReport.requiredFixes.length > 0 && (
+                  <small>Fix: {aiPlausibilityReport.requiredFixes[0]}</small>
+                )}
+                <small>Audit: {aiPlausibilityReport.auditRunId}</small>
+              </>
+            )}
+            {plannedRoute?.audit?.runId && (
+              <button
+                type="button"
+                disabled={aiPlausibilityLoading}
+                onClick={() => void runPlausibilityCheck()}
+              >
+                Erneut pruefen
+              </button>
+            )}
+          </section>
+          <section className="ai-calculation-panel" aria-label="Berechnungs-KI">
+            <div>
+              <span>Berechnung</span>
+              <small>
+                {aiCalculationLoading
+                  ? 'Suchraum wird entworfen...'
+                  : aiCalculationSuggestion
+                    ? `${aiCalculationSuggestion.proposal.strategy} · ${aiCalculationSuggestion.proposal.candidateSeeds.length} Seeds`
+                    : 'Suchraum-KI bereit'}
+              </small>
+            </div>
+            {aiCalculationError && <p role="alert">{aiCalculationError}</p>}
+            {aiCalculationSuggestion && (
+              <>
+                <p>{aiCalculationSuggestion.proposal.expectedImprovement || aiCalculationSuggestion.rationale}</p>
+                <ul>
+                  {aiCalculationSuggestion.proposal.searchWindows.slice(0, 2).map((window) => (
+                    <li key={`${window.label}-${window.startDate}`}>
+                      {window.label}: {window.startDate} bis {window.endDate}
+                    </li>
+                  ))}
+                  {aiCalculationSuggestion.proposal.candidateSeeds.slice(0, 2).map((seed) => (
+                    <li key={`${seed.startDate}-${seed.routeMode}`}>
+                      Seed {seed.startDate} · {seed.routeMode} · Prioritaet {Math.round(seed.priority * 100)}%
+                    </li>
+                  ))}
+                </ul>
+                <small>Audit: {aiCalculationSuggestion.auditRunId}</small>
+              </>
+            )}
+            <div className="ai-calculation-actions">
+              <button
+                type="button"
+                disabled={aiCalculationLoading || routeSections.length === 0}
+                onClick={() => void requestCalculationSuggestion()}
+              >
+                Suchraum vorschlagen
+              </button>
+              <button
+                type="button"
+                disabled={!aiCalculationSuggestion || constellationSearchRunning}
+                onClick={() => {
+                  setAiCalculationBiasActive(true)
+                  void findBestConstellation()
+                }}
+              >
+                Vorschlag mit Solver pruefen
+              </button>
+            </div>
+          </section>
+          <div className="ai-chat-suggestions" aria-label="Chat-Vorschlaege">
+            {AI_CHAT_SUGGESTIONS.map((suggestion) => (
+              <button key={suggestion} type="button" disabled={aiChatLoading} onClick={() => void sendAiChatMessage(suggestion)}>
+                {suggestion}
+              </button>
+            ))}
+          </div>
+          <form
+            className="ai-chat-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void sendAiChatMessage()
+            }}
+          >
+            <input
+              type="text"
+              value={aiChatInput}
+              onChange={(event) => setAiChatInput(event.target.value)}
+              placeholder="Frage zur Mission stellen..."
+              aria-label="Nachricht an den KI-Chat"
+              disabled={aiChatLoading}
+            />
+            <button
+              type="button"
+              className="ai-chat-record-button"
+              disabled={aiChatLoading}
+              onClick={() => aiRecording ? stopAiRecording() : void startAiRecording()}
+              aria-pressed={aiRecording}
+              aria-label={aiRecording ? 'Audioaufnahme stoppen' : 'Audioaufnahme starten'}
+              title={aiRecording ? 'Audioaufnahme stoppen' : 'Audioaufnahme starten'}
+            >
+              {aiRecording ? 'Stop' : 'Mic'}
+            </button>
+            <button type="submit" disabled={aiChatLoading}>Senden</button>
+          </form>
+        </aside>
       </div>
 
       <div className="two-d-actionbar" role="toolbar" aria-label="2D-Ansichten">
@@ -1434,7 +2087,7 @@ export function TwoDView({
                   {plannedRoutePoints.length > 1 && (
                     <path
                       d={pathFromPoints(plannedRoutePoints, orbitalProjection)}
-                      className={`planned-route-path-2d${plannedRouteFlightReady ? ' feasible' : ' proposal'}`}
+                      className={`planned-route-path-2d${plannedRoutePlausibilitySafe ? ' feasible' : ' proposal'}`}
                     />
                   )}
                   {solarPassagePlot && (

@@ -12,6 +12,8 @@ interface ActivitySettingsDialogProps {
   onClose: () => void
 }
 
+const TEMP_API_KEY_STORAGE_KEY = 'solar-system-temporary-api-key'
+
 function activityValues(entry: ActivityEntry) {
   const values = Object.entries(entry.values)
   if (values.length === 0) return '–'
@@ -26,6 +28,8 @@ export function ActivitySettingsDialog({ projectId, onClose }: ActivitySettingsD
   const [onlyCurrentProject, setOnlyCurrentProject] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [temporaryApiKey, setTemporaryApiKey] = useState('')
+  const [temporaryApiKeyStored, setTemporaryApiKeyStored] = useState(false)
   const filters = useMemo(() => ({
     category,
     status,
@@ -58,8 +62,38 @@ export function ActivitySettingsDialog({ projectId, onClose }: ActivitySettingsD
   }, [projectId])
 
   useEffect(() => {
+    setTemporaryApiKeyStored(Boolean(window.sessionStorage.getItem(TEMP_API_KEY_STORAGE_KEY)))
+  }, [])
+
+  useEffect(() => {
     void loadActivities()
   }, [filters])
+
+  const saveTemporaryApiKey = () => {
+    const trimmedKey = temporaryApiKey.trim()
+    if (!trimmedKey) return
+    window.sessionStorage.setItem(TEMP_API_KEY_STORAGE_KEY, trimmedKey)
+    setTemporaryApiKey('')
+    setTemporaryApiKeyStored(true)
+    logActivity({
+      category: 'settings',
+      action: 'temporary-api-key-saved',
+      projectId,
+      details: { storage: 'sessionStorage' },
+    })
+  }
+
+  const clearTemporaryApiKey = () => {
+    window.sessionStorage.removeItem(TEMP_API_KEY_STORAGE_KEY)
+    setTemporaryApiKey('')
+    setTemporaryApiKeyStored(false)
+    logActivity({
+      category: 'settings',
+      action: 'temporary-api-key-cleared',
+      projectId,
+      details: { storage: 'sessionStorage' },
+    })
+  }
 
   return (
     <dialog
@@ -78,6 +112,40 @@ export function ActivitySettingsDialog({ projectId, onClose }: ActivitySettingsD
         </div>
         <button type="button" aria-label="Settings schließen" onClick={onClose}>×</button>
       </header>
+
+      <section className="temporary-api-key-panel" aria-labelledby="temporary-api-key-title">
+        <div>
+          <small>Lokaler API-Key</small>
+          <h3 id="temporary-api-key-title">Temporäre API-Key Eingabe</h3>
+          <p>Der Key wird nur lokal in diesem Browser-Tab gespeichert und automatisch gelöscht, sobald du den Tab oder das Fenster schließt.</p>
+        </div>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            saveTemporaryApiKey()
+          }}
+        >
+          <label>
+            <span>API-Key</span>
+            <input
+              type="password"
+              value={temporaryApiKey}
+              onChange={(event) => setTemporaryApiKey(event.target.value)}
+              placeholder={temporaryApiKeyStored ? 'Temporärer Key ist gesetzt' : 'API-Key nur für diese Sitzung'}
+              autoComplete="off"
+              spellCheck={false}
+              aria-describedby="temporary-api-key-note"
+            />
+          </label>
+          <div className="temporary-api-key-actions">
+            <button type="submit" disabled={!temporaryApiKey.trim()}>Temporär speichern</button>
+            <button type="button" disabled={!temporaryApiKeyStored && !temporaryApiKey} onClick={clearTemporaryApiKey}>Jetzt löschen</button>
+          </div>
+          <output id="temporary-api-key-note" className={temporaryApiKeyStored ? 'stored' : ''}>
+            {temporaryApiKeyStored ? 'Temporärer API-Key aktiv. Nicht im Projekt gespeichert.' : 'Kein temporärer API-Key gespeichert.'}
+          </output>
+        </form>
+      </section>
 
       <div className="activity-settings-toolbar">
         <label>

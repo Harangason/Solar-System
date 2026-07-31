@@ -7,3 +7,6 @@ data/*.db-*
 logs/*.jsonl
 server.log
 server-error.log
+server-ai.log
+server-ai-error.log
+.env.local

@@ -1,0 +1,257 @@
+"""Audited OpenAI Responses API adapter for the interaction role."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from .audit_log import write_ai_audit
+from .schemas import validate_ai_payload
+from .tool_contracts import validate_interaction_actions
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_MODEL = "gpt-5.6-sol"
+RESPONSES_URL = "https://api.openai.com/v1/responses"
+PROMPT_VERSION = "interaction-v1"
+
+INTERACTION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["reply", "basedOnSolverRunIds", "proposedActions"],
+    "properties": {
+        "reply": {"type": "string"},
+        "basedOnSolverRunIds": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "proposedActions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "type",
+                    "sectionId",
+                    "projection",
+                    "requiresConfirmation",
+                ],
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "focus-route-section",
+                            "set-projection",
+                            "run-route-solver",
+                        ],
+                    },
+                    "sectionId": {"type": ["string", "null"]},
+                    "projection": {
+                        "type": ["string", "null"],
+                        "enum": ["corridor", "side", "top", None],
+                    },
+                    "requiresConfirmation": {"type": "boolean", "const": True},
+                },
+            },
+        },
+    },
+}
+
+INTERACTION_INSTRUCTIONS = """Du bist die Interaktions-KI einer Missionsplanung.
+Antworte auf Deutsch, direkt und verstaendlich.
+Der physikalische Solver ist die einzige Quelle fuer Missionswerte. Nenne konkrete
+Zahlen nur, wenn sie im Feld solverResult stehen, und fuehre dabei die zugehoerige
+Solver-Run-ID in basedOnSolverRunIds auf. Erfinde keine Missionswerte. Wenn kein
+Solver-Ergebnis vorliegt, sage das klar.
+Du darfst nur die im Ausgabeschema erlaubten UI-Aktionen vorschlagen. Aktionen
+werden nie automatisch ausgefuehrt und muessen immer Nutzerbestaetigung verlangen.
+Verstecke keine Warnungen und bezeichne best-effort oder ungueltige Ergebnisse
+nicht als flugfaehig."""
+
+
+def _load_local_key() -> str:
+    key = os.getenv("OPENAI_API_KEY", "").strip()
+    if key:
+        return key
+    env_path = PROJECT_ROOT / ".env.local"
+    if env_path.is_file():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            name, value = stripped.split("=", 1)
+            if name.strip() == "OPENAI_API_KEY":
+                return value.strip().strip("'\"")
+    raise RuntimeError("Kein lokaler OPENAI_API_KEY fuer die Interaktions-KI gefunden.")
+
+
+def _call_responses_api(request_payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = _load_local_key()
+    encoded = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+    api_request = Request(
+        os.getenv("OPENAI_RESPONSES_URL", RESPONSES_URL),
+        data=encoded,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urlopen(api_request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        try:
+            details = json.loads(error.read().decode("utf-8"))
+            message = str((details.get("error") or {}).get("message") or "")
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            message = ""
+        raise RuntimeError(
+            f"OpenAI Responses API antwortet mit HTTP {error.code}"
+            + (f": {message}" if message else ".")
+        ) from error
+    except (URLError, TimeoutError) as error:
+        raise RuntimeError("OpenAI Responses API ist derzeit nicht erreichbar.") from error
+
+
+def _validate_history(value: object) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Der Chatverlauf muss eine Liste sein.")
+    history: list[dict[str, str]] = []
+    for item in value[-12:]:
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            raise ValueError("Der Chatverlauf enthaelt eine ungueltige Rolle.")
+        content = item.get("content")
+        if not isinstance(content, str) or not content.strip() or len(content) > 4_000:
+            raise ValueError("Der Chatverlauf enthaelt einen ungueltigen Text.")
+        history.append({"role": item["role"], "content": content.strip()})
+    return history
+
+
+def _extract_output_text(response: dict[str, Any]) -> str:
+    for item in response.get("output", []):
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        for content in item.get("content", []):
+            if isinstance(content, dict) and content.get("type") == "output_text":
+                text = content.get("text")
+                if isinstance(text, str) and text:
+                    return text
+    raise RuntimeError("OpenAI hat keine auswertbare Textantwort geliefert.")
+
+
+def generate_mission_chat(
+    payload: dict[str, Any],
+    *,
+    api_caller: Callable[[dict[str, Any]], dict[str, Any]] = _call_responses_api,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Der KI-Auftrag muss ein JSON-Objekt sein.")
+    message = payload.get("message")
+    if not isinstance(message, str) or not message.strip() or len(message) > 4_000:
+        raise ValueError("Die Chatnachricht ist leer oder zu lang.")
+
+    mission_state = payload.get("missionState")
+    if not isinstance(mission_state, dict):
+        raise ValueError("Der Missionszustand fehlt.")
+    mission_errors = validate_ai_payload("mission-state", mission_state)
+    if mission_errors:
+        raise ValueError("Ungueltiger Missionszustand: " + "; ".join(mission_errors))
+
+    solver_result = payload.get("solverResult")
+    if solver_result is not None:
+        if not isinstance(solver_result, dict):
+            raise ValueError("Das Solver-Ergebnis ist ungueltig.")
+        solver_errors = validate_ai_payload("solver-result", solver_result)
+        if solver_errors:
+            raise ValueError("Ungueltiges Solver-Ergebnis: " + "; ".join(solver_errors))
+
+    history = _validate_history(payload.get("history"))
+    view_state = payload.get("viewState") if isinstance(payload.get("viewState"), dict) else {}
+    context = {
+        "missionState": mission_state,
+        "solverResult": solver_result,
+        "viewState": {
+            "projection": view_state.get("projection"),
+            "activeRouteSectionId": view_state.get("activeRouteSectionId"),
+        },
+    }
+    model = os.getenv("OPENAI_INTERACTION_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    request_payload = {
+        "model": model,
+        "instructions": INTERACTION_INSTRUCTIONS,
+        "input": [
+            {
+                "role": "developer",
+                "content": "Aktueller Anwendungszustand (JSON):\n"
+                + json.dumps(context, ensure_ascii=False, allow_nan=False),
+            },
+            *history,
+            {"role": "user", "content": message.strip()},
+        ],
+        "reasoning": {"effort": "low"},
+        "text": {
+            "verbosity": "low",
+            "format": {
+                "type": "json_schema",
+                "name": "mission_chat_response",
+                "strict": True,
+                "schema": INTERACTION_RESPONSE_SCHEMA,
+            },
+        },
+        "max_output_tokens": 1_200,
+        "store": False,
+    }
+    solver_run_ids = [solver_result["runId"]] if solver_result else []
+    audit_input = {
+        "message": message.strip(),
+        "history": history,
+        "context": context,
+    }
+    try:
+        api_response = api_caller(request_payload)
+        structured = json.loads(_extract_output_text(api_response))
+        if not isinstance(structured.get("reply"), str) or not structured["reply"].strip():
+            raise ValueError("Die KI-Antwort enthaelt keinen Antworttext.")
+        cited_ids = structured.get("basedOnSolverRunIds")
+        if not isinstance(cited_ids, list) or any(item not in solver_run_ids for item in cited_ids):
+            raise ValueError("Die KI referenziert einen nicht uebergebenen Solver-Lauf.")
+        actions = validate_interaction_actions(
+            structured.get("proposedActions"),
+            mission_state,
+        )
+        output = {
+            "reply": structured["reply"].strip(),
+            "basedOnSolverRunIds": cited_ids,
+            "proposedActions": actions,
+            "model": str(api_response.get("model") or model),
+            "responseId": str(api_response.get("id") or ""),
+        }
+        audit = write_ai_audit(
+            role="interaction",
+            model_name=output["model"],
+            input_payload=audit_input,
+            output_payload=output,
+            status="success",
+            prompt_version=PROMPT_VERSION,
+            solver_run_ids=cited_ids,
+        )
+        return {**output, "auditRunId": audit["runId"]}
+    except Exception as error:
+        write_ai_audit(
+            role="interaction",
+            model_name=model,
+            input_payload=audit_input,
+            output_payload=None,
+            status="rejected" if isinstance(error, (ValueError, json.JSONDecodeError)) else "error",
+            prompt_version=PROMPT_VERSION,
+            solver_run_ids=solver_run_ids,
+            error=str(error),
+        )
+        raise

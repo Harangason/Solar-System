@@ -752,37 +752,36 @@ Grenzwert- und Singularitaetsbetrachtung:
 
 ## Architektur
 
+Die ausfuehrliche Zuordnung und Abhaengigkeitsrichtung steht in
+[`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md).
+
 ```text
 .
-├── main.py                # Flask-Web-Server, Routen und Startlogik
-├── universe.py            # Simulationslogik der Himmelskoerper
-├── satellite.py           # Satelliten-Klassen
-├── trajectory.py          # Trajektorien- und Bahnberechnungen
-├── route_planner.py       # Missions-Routenplanung
-├── mission_optimizer.py   # Optimierung von Missionsparametern
-├── calculation_audit.py   # Audit-Logging fuer Berechnungen
-├── propulsion.py          # Antriebsmodelle
-├── view_2d_celestials.py  # 2D-Visualisierung
-├── view_3d_celestials.py  # 3D-Visualisierung
-├── web/                   # Frontend-Dateien
-├── scripts/               # Hilfsskripte
-├── requirements.txt       # Python-Abhaengigkeiten
-└── README.md              # Projektdokumentation
+├── main.py          # Flask-Einstiegspunkt und API
+├── planner/         # Routenplanung und Optimierung
+├── solver/          # Numerische Bahn- und Ephemeridenloeser
+├── models/          # Fachmodelle
+├── services/        # Persistenz und Audit-Logging
+├── visualization/   # Serverseitige Ansichten
+├── ai/              # AI-Agenten und Evaluation
+├── web/             # React-/Three.js-Frontend
+├── tests/           # Python-Tests
+└── scripts/         # Hilfsskripte
 ```
 
 | Datei | Aufgabe |
 | --- | --- |
 | `main.py` | Flask-Routen, API-Endpunkte, Serverstart |
-| `trajectory.py` | Solar-Oberth-Mission, RK4, N-Body-Stoerungen, Kalman-Navigation |
-| `route_planner.py` | Lambert-Transfer, Swing-by, Zielasymptote, Audit |
-| `nbody_propagation.py` | Differentielle Korrektur und simultane DOP853-N-Koerper-Validierung |
-| `propulsion.py` | Modulare Antriebsmodelle und kontinuierliche Beschleunigungen |
-| `satellite.py` | Raumfahrzeugstruktur, Massen, Stufen, Tsiolkovsky-Burns |
-| `mission_optimizer.py` | Suche und Bewertung von Missionsfenstern |
-| `calculation_audit.py` | JSONL-Nachweis der berechneten Routen |
-| `generic_route_planner.py` | Freie Transfers zwischen Sonne, Planeten und Monden |
-| `multi_route_planner.py` | Kopplung geordneter Routenabschnitte und Referenzrahmen |
-| `project_store.py` | Versionierte lokale SQLite-Projektsnapshots |
+| `solver/trajectory.py` | Solar-Oberth-Mission, RK4, N-Body-Stoerungen, Kalman-Navigation |
+| `planner/route_planner.py` | Lambert-Transfer, Swing-by, Zielasymptote, Audit |
+| `solver/nbody_propagation.py` | Differentielle Korrektur und simultane DOP853-N-Koerper-Validierung |
+| `models/propulsion.py` | Modulare Antriebsmodelle und kontinuierliche Beschleunigungen |
+| `models/satellite.py` | Raumfahrzeugstruktur, Massen, Stufen, Tsiolkovsky-Burns |
+| `planner/mission_optimizer.py` | Suche und Bewertung von Missionsfenstern |
+| `services/calculation_audit.py` | JSONL-Nachweis der berechneten Routen |
+| `planner/generic_route_planner.py` | Freie Transfers zwischen Sonne, Planeten und Monden |
+| `planner/multi_route_planner.py` | Kopplung geordneter Routenabschnitte und Referenzrahmen |
+| `services/project_store.py` | Versionierte lokale SQLite-Projektsnapshots |
 | `web/src/orbitalMath.ts` | Planetendarstellung aus Kepler-Elementen |
 | `web/src/missionSimulation.ts` | Frontend-Konfiguration und API-Aufruf |
 | `web/src/propulsionModels.ts` | Frontend-Parameter der Antriebsmodule |
