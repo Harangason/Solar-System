@@ -133,6 +133,7 @@ export function App() {
     setRouteSections(sections)
     setPlannedMissionDate(date)
     setPlannedRoute(route)
+    setViewMode('3d')
   }, [])
 
   const setWaypointId: Dispatch<SetStateAction<string>> = useCallback((action) => {

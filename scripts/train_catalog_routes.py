@@ -1,4 +1,4 @@
-"""Train the route ranker on planets, principal moons and a Voyager grand tour."""
+"""Train the route ranker on planets, principal moons, round trips and a Voyager grand tour."""
 
 from __future__ import annotations
 
@@ -45,6 +45,12 @@ MOON_TARGETS = (
     ("uranus-titania", "Titania"),
     ("uranus-oberon", "Oberon"),
     ("neptune-triton", "Triton"),
+)
+
+ROUNDTRIP_TARGETS = (
+    ("earth-moon-earth", "Erde → Mond → Erde", [("earth", "earth-moon"), ("earth-moon", "earth")]),
+    ("earth-mars-earth", "Erde → Mars → Erde", [("earth", "mars"), ("mars", "earth")]),
+    ("earth-venus-earth", "Erde → Venus → Erde", [("earth", "venus"), ("venus", "earth")]),
 )
 
 
@@ -117,6 +123,16 @@ def build_scenarios() -> list[dict]:
         "routeSections": [_section("earth", target_id, 1)],
         "mission": default_mission,
     } for target_id, name in MOON_TARGETS)
+    scenarios.extend({
+        "group": "roundtrip",
+        "targetId": route_id,
+        "name": name,
+        "routeSections": [
+            _section(origin, target, index)
+            for index, (origin, target) in enumerate(legs, start=1)
+        ],
+        "mission": default_mission,
+    } for route_id, name, legs in ROUNDTRIP_TARGETS)
     scenarios.append({
         "group": "voyager",
         "targetId": "neptune",
@@ -217,7 +233,7 @@ def run_catalog_batch(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runs-per-scenario", type=int, default=25)
+    parser.add_argument("--runs-per-scenario", type=int, default=50)
     parser.add_argument("--search-start", required=True)
     parser.add_argument("--search-end", required=True)
     parser.add_argument("--workers", type=int, default=8)
