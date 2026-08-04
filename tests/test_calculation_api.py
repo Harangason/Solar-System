@@ -104,6 +104,9 @@ class CalculationApiTests(unittest.TestCase):
                 "graphNodes": 1005,
                 "graphEdges": 2007,
                 "shortlistCount": 8,
+                "geometryPoints": [
+                    {"date": "2029-05-17", "score": 3672.6, "shortlisted": True}
+                ],
                 "resultCount": 1,
                 "bestVariantId": variant_id,
             },
@@ -117,6 +120,7 @@ class CalculationApiTests(unittest.TestCase):
         )
 
         self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.get_json()["geometryPoints"][0]["date"], "2029-05-17")
         self.assertTrue(restored.get_json()["candidates"][0]["geometryValid"])
         self.assertTrue(restored.get_json()["candidates"][0]["performanceEvaluated"])
         self.assertEqual(restored.get_json()["candidates"][0]["routePoints"][-1], [13.0, 14.0, 15.0])

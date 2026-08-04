@@ -37,6 +37,17 @@ export interface WaypointRouteResult {
   }
   startDate: string
   totalFlightDays: number
+  spacecraftIntegration?: {
+    validated: boolean
+    routeGeometryPreserved: boolean
+    wetMassKg: number
+    payloadMassKg: number
+    requestedOberthDeltaVKmS: number
+    achievedOberthDeltaVKmS: number
+    propellantUsedKg: number
+    enabledPropulsionModules: Array<string | null>
+    warnings: string[]
+  } | null
   warnings?: string[]
   solarPassage?: {
     entryIndex: number

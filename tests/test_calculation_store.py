@@ -183,6 +183,9 @@ class CalculationStoreTests(unittest.TestCase):
                 "graphNodes": 1005,
                 "graphEdges": 2007,
                 "shortlistCount": 8,
+                "geometryPoints": [
+                    {"date": "2029-05-17", "score": 3672.6, "shortlisted": True}
+                ],
                 "resultCount": 1,
                 "flightReadyCount": 0,
                 "bestVariantId": variant_id,
@@ -193,6 +196,7 @@ class CalculationStoreTests(unittest.TestCase):
         detail = self.store.get_variant(variant_id)
 
         self.assertEqual(restored["graphNodes"], 1005)
+        self.assertEqual(restored["geometryPoints"][0]["score"], 3672.6)
         self.assertEqual(restored["bestVariantId"], variant_id)
         self.assertEqual(restored["candidates"][0]["deltaVDeficitKmS"], 4.5)
         self.assertTrue(restored["candidates"][0]["geometryValid"])

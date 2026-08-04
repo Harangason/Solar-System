@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 from services.project_store import PROJECT_DATABASE
 
 
-CALCULATION_SCHEMA_VERSION = 3
+CALCULATION_SCHEMA_VERSION = 4
 
 
 def _utc_now() -> str:
@@ -149,6 +149,7 @@ class CalculationStore:
                     best_variant_id TEXT NULL
                         REFERENCES calculation_variants(id) ON DELETE SET NULL,
                     input_json TEXT NOT NULL DEFAULT '{}',
+                    geometry_snapshot_json TEXT NOT NULL DEFAULT '[]',
                     error_message TEXT NOT NULL DEFAULT '',
                     started_at_utc TEXT NOT NULL,
                     completed_at_utc TEXT NULL
@@ -343,6 +344,17 @@ class CalculationStore:
                         f"ALTER TABLE calculation_variants "
                         f"ADD COLUMN {column_name} {column_definition}"
                     )
+            run_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(calculation_runs)"
+                ).fetchall()
+            }
+            if "geometry_snapshot_json" not in run_columns:
+                connection.execute(
+                    "ALTER TABLE calculation_runs "
+                    "ADD COLUMN geometry_snapshot_json TEXT NOT NULL DEFAULT '[]'"
+                )
             connection.execute(
                 """
                 INSERT OR IGNORE INTO calculation_schema_migrations (
@@ -408,6 +420,7 @@ class CalculationStore:
             "fullValidationBudget": ("full_validation_budget", _optional_int),
             "resultCount": ("result_count", _optional_int),
             "flightReadyCount": ("flight_ready_count", _optional_int),
+            "geometryPoints": ("geometry_snapshot_json", _json),
             "error": ("error_message", str),
         }
         assignments: list[str] = []
@@ -963,6 +976,7 @@ class CalculationStore:
             "fullValidationBudget": row["full_validation_budget"],
             "resultCount": row["result_count"],
             "flightReadyCount": row["flight_ready_count"],
+            "geometryPoints": json.loads(row["geometry_snapshot_json"] or "[]"),
             "bestVariantId": row["best_variant_id"] or "",
             "error": row["error_message"],
             "startedAtUtc": row["started_at_utc"],

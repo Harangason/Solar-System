@@ -11,8 +11,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from math import acos, atan2, cos, pi, sin, sqrt
+from math import acos, atan2, cos, exp, log, pi, sin, sqrt
 from pathlib import Path
+
+from scipy.optimize import least_squares
 
 from planner.route_planner import (
     G_KM3_KG_S2,
@@ -39,6 +41,7 @@ from solver.trajectory import (
     _mission_epoch_days,
     _normalize,
     _planet_state_at,
+    simulate_mission,
 )
 from visualization.view_3d_celestials import PLANET_DATA
 
@@ -481,7 +484,11 @@ def _targeted_body_passage_angle_deg(
     requested_angle = float(passage["orbitAngleDeg"])
     minimum_angle = 360.0 if passage["mode"] == "full-orbit" else requested_angle
 
-    def assess(selected_angle: float, passage_normal: tuple = normal) -> dict | None:
+    def assess(
+        selected_angle: float,
+        passage_normal: tuple = normal,
+        forced_transfer_days: float | None = None,
+    ) -> dict | None:
         passage_seconds = selected_angle * pi / 180 * entry_radius / passage_speed
         exit_day = entry_day + passage_seconds / DAY_SECONDS
         target_position, target_velocity = _body_state(
@@ -492,7 +499,7 @@ def _targeted_body_passage_angle_deg(
             passage_normal,
             direction_sign * selected_angle * pi / 180,
         ))
-        tangent = _normalize(_cross(normal, radial))
+        tangent = _normalize(_cross(passage_normal, radial))
         if direction_sign < 0:
             tangent = tuple(-component for component in tangent)
         exit_position = _add(
@@ -506,12 +513,16 @@ def _targeted_body_passage_angle_deg(
         provisional_position, _ = _body_state(
             lookahead_target, epoch_days + exit_day, catalog
         )
-        provisional_seconds = _transfer_seconds(
-            exit_position,
-            provisional_position,
-            MU_SUN,
-            local=False,
-            reference_speed_km_s=_magnitude(exit_velocity),
+        provisional_seconds = (
+            max(0.05, forced_transfer_days) * DAY_SECONDS
+            if forced_transfer_days is not None
+            else _transfer_seconds(
+                exit_position,
+                provisional_position,
+                MU_SUN,
+                local=False,
+                reference_speed_km_s=_magnitude(exit_velocity),
+            )
         )
         provisional_position, _ = _body_state(
             lookahead_target,
@@ -530,12 +541,16 @@ def _targeted_body_passage_angle_deg(
                 for component in endpoint_direction
             ),
         )
-        transfer_seconds = _transfer_seconds(
-            exit_position,
-            provisional_endpoint,
-            MU_SUN,
-            local=False,
-            reference_speed_km_s=_magnitude(exit_velocity),
+        transfer_seconds = (
+            provisional_seconds
+            if forced_transfer_days is not None
+            else _transfer_seconds(
+                exit_position,
+                provisional_endpoint,
+                MU_SUN,
+                local=False,
+                reference_speed_km_s=_magnitude(exit_velocity),
+            )
         )
         future_position, _ = _body_state(
             lookahead_target,
@@ -576,8 +591,9 @@ def _targeted_body_passage_angle_deg(
             "passageNormal": passage_normal,
         }
 
-    # Three bounded passes provide sub-0.01 degree phase resolution without
-    # multiplying the full adaptive search by a dense 360-degree grid.
+    # First locate a useful phase basin cheaply. The requested passage angle
+    # is a lower bound: one additional revolution remains available to phase
+    # the passive exit for the following body.
     candidates = [
         item for item in (
             assess(minimum_angle + step * 5.0) for step in range(73)
@@ -586,111 +602,63 @@ def _targeted_body_passage_angle_deg(
     if not candidates:
         raise ValueError("Keine planetare Lambert-Kopplung gefunden.")
     selected = min(candidates, key=lambda item: item["mismatchKmS"])
-    for half_width, step_size in ((5.0, 0.1), (0.1, 0.005)):
-        start = max(minimum_angle, selected["angleDeg"] - half_width)
-        count = int(2 * half_width / step_size) + 1
-        refined = [
-            item for item in (
-                assess(start + step * step_size) for step in range(count)
-                if start + step * step_size <= minimum_angle + 360.0 + 1e-9
-            ) if item is not None
-        ]
-        if refined:
-            selected = min(refined, key=lambda item: item["mismatchKmS"])
-    # A scalar phase scan cannot remove an out-of-plane Lambert mismatch.
-    # Reconstruct the passage plane from the required passive departure and
-    # iterate because that plane in turn moves the finite-radius exit point.
-    best_selected = selected
-    current_selected = selected
-    plane_coupling_iterations = []
-    for _ in range(12):
-        desired_tangent = _normalize(_subtract(
-            current_selected["requiredDepartureVelocity"],
-            current_selected["targetVelocity"],
-        ))
-        signed_tangent = tuple(
-            direction_sign * component for component in desired_tangent
+
+    # Phase, passage plane and encounter time are one coupled targeting
+    # problem. Optimising them one after another leaves a false correction
+    # burn because every later variable moves the optimum of the earlier one.
+    # Solve the three velocity residuals together instead. Logarithmic time
+    # keeps short and multi-year transfers numerically well conditioned.
+    seed_normal = selected["passageNormal"]
+    lower_days = max(10.0, selected["transferDays"] * 0.15)
+    upper_days = min(20 * 365.25, max(365.25, selected["transferDays"] * 8.0))
+    evaluated: list[dict] = []
+
+    def joint_residual(parameters) -> tuple:
+        angle_deg, plane_offset, log_transfer_days = (
+            float(value) for value in parameters
         )
-        candidate_normal = _cross(entry_direction, signed_tangent)
-        if _magnitude(candidate_normal) < 1e-9:
-            break
-        candidate_normal = _normalize(candidate_normal)
-        desired_radial = _normalize(_cross(signed_tangent, candidate_normal))
-        signed_angle = atan2(
-            _dot(candidate_normal, _cross(entry_direction, desired_radial)),
-            _dot(entry_direction, desired_radial),
-        ) * 180 / pi
-        directed_angle = (signed_angle / direction_sign) % 360.0
-        candidate_angle = directed_angle
-        while candidate_angle + 1e-9 < minimum_angle:
-            candidate_angle += 360.0
-        if candidate_angle > minimum_angle + 360.0 + 1e-9:
-            break
-        candidate = assess(candidate_angle, candidate_normal)
+        candidate_normal = _normalize(_rotate_vector(
+            seed_normal, entry_direction, plane_offset,
+        ))
+        candidate = assess(
+            angle_deg, candidate_normal, exp(log_transfer_days)
+        )
         if candidate is None:
-            break
-        plane_coupling_iterations.append({
-            "angleDeg": candidate_angle,
-            "mismatchKmS": candidate["mismatchKmS"],
-            "normal": list(candidate_normal),
-        })
-        if candidate["mismatchKmS"] < best_selected["mismatchKmS"]:
-            best_selected = candidate
-        next_tangent = _normalize(_subtract(
-            candidate["requiredDepartureVelocity"], candidate["targetVelocity"]
-        ))
-        current_selected = candidate
-        if _angle_deg(next_tangent, desired_tangent) < 0.001:
-            break
-    selected = best_selected
-    # Finish with a bounded two-dimensional coordinate search.  Plane and
-    # phase are coupled, so refining only one of them can settle on a large
-    # artificial burn even though a passive branch exists nearby.
-    for normal_step, angle_step in (
-        (30.0, 20.0),
-        (10.0, 5.0),
-        (2.0, 1.0),
-        (0.5, 0.2),
-        (0.1, 0.05),
-        (0.02, 0.01),
-    ):
-        coupled_candidates = []
-        for normal_offset in range(-2, 3):
-            candidate_normal = _normalize(_rotate_vector(
-                selected["passageNormal"],
-                entry_direction,
-                normal_offset * normal_step * pi / 180,
-            ))
-            for angle_offset in range(-2, 3):
-                candidate_angle = selected["angleDeg"] + angle_offset * angle_step
-                if not (
-                    minimum_angle - 1e-9
-                    <= candidate_angle
-                    <= minimum_angle + 360.0 + 1e-9
-                ):
-                    continue
-                candidate = assess(candidate_angle, candidate_normal)
-                if candidate is not None:
-                    coupled_candidates.append(candidate)
-        if coupled_candidates:
-            selected = min(
-                [selected, *coupled_candidates],
-                key=lambda item: item["mismatchKmS"],
-            )
-    best_normal = selected["passageNormal"]
-    local_start = max(minimum_angle, selected["angleDeg"] - 0.2)
-    local_refined = [
-        item for item in (
-            assess(local_start + step * 0.005, best_normal)
-            for step in range(81)
-            if local_start + step * 0.005 <= minimum_angle + 360.0 + 1e-9
-        ) if item is not None
-    ]
-    if local_refined:
-        selected = min(
-            [selected, *local_refined],
-            key=lambda item: item["mismatchKmS"],
+            return (1_000.0, 1_000.0, 1_000.0)
+        evaluated.append(candidate)
+        return _subtract(
+            candidate["requiredDepartureVelocity"], candidate["exitVelocity"]
         )
+
+    joint = least_squares(
+        joint_residual,
+        (
+            selected["angleDeg"],
+            0.0,
+            log(selected["transferDays"]),
+        ),
+        bounds=(
+            (minimum_angle, -pi, log(lower_days)),
+            (minimum_angle + 360.0, pi, log(upper_days)),
+        ),
+        x_scale=(90.0, 1.0, 1.0),
+        max_nfev=80,
+        ftol=1e-9,
+        xtol=1e-9,
+        gtol=1e-9,
+    )
+    joint_residual(joint.x)
+    if evaluated:
+        selected = min(
+            [selected, *evaluated], key=lambda item: item["mismatchKmS"]
+        )
+    plane_coupling_iterations = [{
+        "angleDeg": selected["angleDeg"],
+        "mismatchKmS": selected["mismatchKmS"],
+        "normal": list(selected["passageNormal"]),
+        "transferDays": selected["transferDays"],
+        "solverEvaluations": int(joint.nfev),
+    }]
     desired_direction = _normalize(_subtract(
         selected["futureTargetPosition"],
         tuple(0.0 for _ in range(3)),
@@ -1179,6 +1147,44 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
         if solar_oberth_enabled
         else 0.0
     )
+    spacecraft_integration = None
+    if bool(values.get("integrateSpacecraft")):
+        # Route discovery deliberately stays independent of a particular
+        # spacecraft.  The interactive 3D hand-off, however, must validate the
+        # selected geometry with the actual masses, stages and propulsion
+        # modules.  The mission model applies the rocket equation and may cap
+        # the requested Oberth burn when propellant or configuration is
+        # insufficient.  Feed that achieved value back into the same route
+        # instead of silently constructing a different unconstrained route.
+        spacecraft_mission = simulate_mission({
+            **mission_values,
+            "missionYears": min(1.0, max(1.0, float(mission_values.get("missionYears", 1.0)))),
+        })
+        configured_oberth_delta_v = min(
+            configured_oberth_delta_v,
+            spacecraft_mission.summary.achieved_burn_delta_v_km_s,
+        )
+        enabled_modules = [
+            report for report in spacecraft_mission.summary.propulsion_report
+            if report.get("enabled")
+        ]
+        config = spacecraft_mission.config
+        spacecraft_integration = {
+            "validated": True,
+            "routeGeometryPreserved": True,
+            "wetMassKg": (
+                config.payload_mass_kg
+                + config.carrier_mass_kg
+                + config.heatshield_mass_kg
+                + config.propellant_mass_kg
+            ),
+            "payloadMassKg": config.payload_mass_kg,
+            "requestedOberthDeltaVKmS": config.oberth_delta_v_km_s,
+            "achievedOberthDeltaVKmS": spacecraft_mission.summary.achieved_burn_delta_v_km_s,
+            "propellantUsedKg": spacecraft_mission.summary.propellant_used_kg,
+            "enabledPropulsionModules": [report.get("name") for report in enabled_modules],
+            "warnings": list(spacecraft_mission.summary.warnings),
+        }
     sundiver_transfer_provided = (
         len(parsed) > 0
         and parsed[0]["origin"].id == "earth"
@@ -1332,13 +1338,27 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
         frame_start = _subtract(start_position, central_position)
         frame_velocity = _subtract(start_velocity, central_velocity)
 
+        previous_exit_selection = (
+            calculated[-1].get("corridor", {}).get("exitAngleSelection")
+            if calculated else None
+        )
+        coupled_transfer_seconds = (
+            float(previous_exit_selection["transferPreviewDays"]) * DAY_SECONDS
+            if (
+                previous_exit_selection
+                and previous_exit_selection.get("lookaheadTargetId") == target.id
+                and float(previous_exit_selection.get("transferPreviewDays", 0.0)) > 0
+            )
+            else None
+        )
+
         provisional_target_position, _ = _body_state(
             target, epoch_days + start_day, catalog
         )
         provisional_frame_target = _subtract(
             provisional_target_position, central_position
         )
-        provisional_duration = _transfer_seconds(
+        provisional_duration = coupled_transfer_seconds or _transfer_seconds(
             frame_start,
             provisional_frame_target,
             gravitational_parameter,
@@ -1388,7 +1408,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
             tuple(component * entry_radius for component in direction),
         )
         frame_end = _subtract(entry_position, arrival_central_position)
-        duration_seconds = _transfer_seconds(
+        duration_seconds = coupled_transfer_seconds or _transfer_seconds(
             frame_start,
             frame_end,
             gravitational_parameter,
@@ -1658,6 +1678,7 @@ def simulate_generic_route_sections(values: dict | None) -> dict:
     return {
         "startDate": start_date,
         "calculationStage": "geometry" if geometry_only else "performance",
+        "spacecraftIntegration": spacecraft_integration,
         "totalFlightDays": start_day,
         "warnings": warnings,
         "trajectory": trajectory,

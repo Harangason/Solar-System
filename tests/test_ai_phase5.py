@@ -10,6 +10,7 @@ from ai.evaluation import (
     score_candidate,
     train_and_evaluate,
     train_candidate_ranker,
+    load_saved_model,
 )
 
 
@@ -120,6 +121,63 @@ class MLPhaseFiveTests(unittest.TestCase):
 
         self.assertEqual(report["dataset"]["positiveRows"], 0)
         self.assertEqual(report["verdict"], "needs-more-data")
+
+    def test_ranker_learns_quality_order_within_rejected_candidates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log_path = Path(directory) / "activities.jsonl"
+            write_jsonl(log_path, [{
+                "id": f"candidate-{index}",
+                "category": "calculation",
+                "action": "constellation-candidate",
+                "status": "rejected",
+                "values": {
+                    "quality": quality,
+                    "deltaVDeficitKmS": deficit,
+                    "feasible": False,
+                },
+                "details": {"searchRunId": "quality-window"},
+            } for index, (quality, deficit) in enumerate([(400, 0.4), (100, 6.0)])])
+            examples = normalize_candidate_dataset([log_path])
+
+        model = train_candidate_ranker(examples)
+        self.assertGreater(
+            score_candidate(model, examples[0].features),
+            score_candidate(model, examples[1].features),
+        )
+
+    def test_train_and_evaluate_can_persist_and_reload_ranker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log_path = root / "activities.jsonl"
+            model_path = root / "ranker.json"
+            write_jsonl(log_path, [
+                {
+                    "id": "good",
+                    "category": "calculation",
+                    "action": "constellation-candidate",
+                    "status": "success",
+                    "values": {"feasible": True, "collisionFree": True},
+                    "details": {"searchRunId": "run-1"},
+                },
+                {
+                    "id": "bad",
+                    "category": "calculation",
+                    "action": "constellation-candidate",
+                    "status": "rejected",
+                    "values": {"feasible": False, "collisionFree": False},
+                    "details": {"searchRunId": "run-1"},
+                },
+            ])
+
+            report = train_and_evaluate(
+                [log_path], persist_model=True, model_path=model_path,
+            )
+            restored = load_saved_model(model_path)
+
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored["trainingRows"], 2)
+        self.assertIn("trainedAtUtc", restored)
+        self.assertEqual(report["model"], restored)
 
 
 if __name__ == "__main__":

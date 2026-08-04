@@ -31,7 +31,7 @@ from services.project_store import ProjectStore
 from ai.audit_log import AI_AUDIT_LOGS, read_latest_ai_audit
 from ai.audio_agent import synthesize_mission_speech, transcribe_mission_audio
 from ai.calculation_agent import generate_calculation_suggestion
-from ai.evaluation import train_and_evaluate
+from ai.evaluation import load_saved_model, train_and_evaluate
 from ai.interaction_agent import generate_mission_chat
 from ai.plausibility_agent import generate_plausibility_check
 from visualization.view_2d_celestials import render_2d_view
@@ -700,6 +700,35 @@ def ai_calculation_suggest():
 @app.get("/api/ai/ml/evaluation")
 def ai_ml_evaluation():
     return jsonify(train_and_evaluate())
+
+
+@app.post("/api/ai/ml/train")
+def ai_ml_train():
+    report = train_and_evaluate(persist_model=True)
+    write_activity(
+        source="ml-ranker",
+        category="ai",
+        action="ml-candidate-ranker-trained",
+        status="success" if report["verdict"] == "ready" else "rejected",
+        project_id=_project_id(request.get_json(silent=True)),
+        values={
+            "trainingRows": report["dataset"]["rows"],
+            "positiveRows": report["dataset"]["positiveRows"],
+            "negativeRows": report["dataset"]["negativeRows"],
+            "groups": report["evaluation"]["groups"],
+            "pairwiseAccuracy": report["evaluation"]["pairwiseAccuracy"],
+        },
+        details={"modelPath": report.get("modelPath", "")},
+    )
+    return jsonify(report)
+
+
+@app.get("/api/ai/ml/model")
+def ai_ml_model():
+    model = load_saved_model()
+    if model is None:
+        return jsonify({"error": "Noch kein persistentes ML-Modell trainiert."}), 404
+    return jsonify(model)
 
 
 @app.get("/api/ai/audit/latest")

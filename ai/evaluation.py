@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,10 @@ FEATURE_NAMES = [
     "corridorSatisfied",
     "collisionFree",
     "fullCorridorCheck",
+    "annualPhaseSin",
+    "annualPhaseCos",
+    "jupiterPhaseSin",
+    "jupiterPhaseCos",
 ]
 
 
@@ -122,7 +127,7 @@ def train_candidate_ranker(examples: list[CandidateExample]) -> dict[str, Any]:
     if not examples:
         return {
             "schemaVersion": "1.0",
-            "modelType": "centroid-linear-ranker",
+            "modelType": "quality-linear-ranker",
             "featureNames": FEATURE_NAMES,
             "weights": {name: 0.0 for name in FEATURE_NAMES},
             "intercept": 0.0,
@@ -131,36 +136,34 @@ def train_candidate_ranker(examples: list[CandidateExample]) -> dict[str, Any]:
             "useOnlyForPrioritization": True,
         }
     positives = [example for example in examples if example.success]
-    negatives = [example for example in examples if not example.success]
-    if not positives or not negatives:
-        return {
-            "schemaVersion": "1.0",
-            "modelType": "centroid-linear-ranker",
-            "featureNames": FEATURE_NAMES,
-            "weights": {name: 0.0 for name in FEATURE_NAMES},
-            "intercept": 0.0,
-            "trainingRows": len(examples),
-            "positiveRows": len(positives),
-            "useOnlyForPrioritization": True,
-        }
+    target_values = [example.target_score for example in examples]
+    target_mean = _mean(target_values)
+    target_scale = math.sqrt(_mean([
+        (value - target_mean) ** 2 for value in target_values
+    ])) or 1.0
     weights: dict[str, float] = {}
+    feature_means: dict[str, float] = {}
+    feature_scales: dict[str, float] = {}
     for name in FEATURE_NAMES:
         all_values = [example.features.get(name, 0.0) for example in examples]
-        variance = _mean([(value - _mean(all_values)) ** 2 for value in all_values])
+        feature_mean = _mean(all_values)
+        variance = _mean([(value - feature_mean) ** 2 for value in all_values])
         scale = math.sqrt(variance) or 1.0
-        pos_mean = _mean([example.features.get(name, 0.0) for example in positives])
-        neg_mean = _mean([example.features.get(name, 0.0) for example in negatives])
-        weights[name] = (pos_mean - neg_mean) / scale
-    midpoint = _mean([
-        sum(example.features.get(name, 0.0) * weights[name] for name in FEATURE_NAMES)
-        for example in examples
-    ])
+        feature_means[name] = feature_mean
+        feature_scales[name] = scale
+        weights[name] = _mean([
+            ((example.features.get(name, 0.0) - feature_mean) / scale)
+            * ((example.target_score - target_mean) / target_scale)
+            for example in examples
+        ])
     return {
         "schemaVersion": "1.0",
-        "modelType": "centroid-linear-ranker",
+        "modelType": "quality-linear-ranker",
         "featureNames": FEATURE_NAMES,
         "weights": weights,
-        "intercept": -midpoint,
+        "featureMeans": feature_means,
+        "featureScales": feature_scales,
+        "intercept": 0.0,
         "trainingRows": len(examples),
         "positiveRows": len(positives),
         "useOnlyForPrioritization": True,
@@ -169,9 +172,17 @@ def train_candidate_ranker(examples: list[CandidateExample]) -> dict[str, Any]:
 
 def score_candidate(model: dict[str, Any], features: dict[str, float]) -> float:
     weights = model.get("weights") if isinstance(model.get("weights"), dict) else {}
+    means = model.get("featureMeans") if isinstance(model.get("featureMeans"), dict) else {}
+    scales = model.get("featureScales") if isinstance(model.get("featureScales"), dict) else {}
     score = _finite_number(model.get("intercept"))
     for name in model.get("featureNames") or FEATURE_NAMES:
-        score += _finite_number(features.get(str(name))) * _finite_number(weights.get(str(name)))
+        feature_name = str(name)
+        scale = _finite_number(scales.get(feature_name), 1.0) or 1.0
+        normalized = (
+            _finite_number(features.get(feature_name))
+            - _finite_number(means.get(feature_name))
+        ) / scale
+        score += normalized * _finite_number(weights.get(feature_name))
     return score
 
 
@@ -225,7 +236,12 @@ def evaluate_candidate_ranker(examples: list[CandidateExample], model: dict[str,
     }
 
 
-def train_and_evaluate(paths: list[Path] | None = None) -> dict[str, Any]:
+def train_and_evaluate(
+    paths: list[Path] | None = None,
+    *,
+    persist_model: bool = False,
+    model_path: Path = DEFAULT_MODEL_PATH,
+) -> dict[str, Any]:
     examples = normalize_candidate_dataset(paths)
     model = train_candidate_ranker(examples)
     evaluation = evaluate_candidate_ranker(examples, model)
@@ -236,7 +252,7 @@ def train_and_evaluate(paths: list[Path] | None = None) -> dict[str, Any]:
         if len(examples) >= 8 and evaluation["groups"] >= 2 and positive_rows > 0 and negative_rows > 0
         else "needs-more-data"
     )
-    return {
+    report = {
         "schemaVersion": "1.0",
         "dataset": {
             "rows": len(examples),
@@ -248,11 +264,40 @@ def train_and_evaluate(paths: list[Path] | None = None) -> dict[str, Any]:
         "evaluation": evaluation,
         "verdict": verdict,
     }
+    if persist_model:
+        persisted_model = {
+            **model,
+            "trainedAtUtc": datetime.now(timezone.utc).isoformat(),
+            "evaluation": evaluation,
+            "verdict": verdict,
+        }
+        save_model(persisted_model, model_path)
+        report["model"] = persisted_model
+        try:
+            report["modelPath"] = str(model_path.relative_to(PROJECT_ROOT))
+        except ValueError:
+            report["modelPath"] = str(model_path)
+    return report
 
 
 def save_model(model: dict[str, Any], path: Path = DEFAULT_MODEL_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(model, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(
+        json.dumps(model, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+
+
+def load_saved_model(path: Path = DEFAULT_MODEL_PATH) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        model = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return model if isinstance(model, dict) else None
 
 
 def main(argv: list[str] | None = None) -> int:

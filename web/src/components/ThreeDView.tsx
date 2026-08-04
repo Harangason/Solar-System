@@ -248,6 +248,8 @@ export function ThreeDView({
   const [aimpointRole, setAimpointRole] = useState<AimpointRole>('periapsis')
   const [routeError, setRouteError] = useState<string | null>(null)
   const [routeLoading, setRouteLoading] = useState(false)
+  const [routeValidationPending, setRouteValidationPending] = useState(false)
+  const observedPlannedRouteRef = useRef(plannedRoute)
   const [optimizationWindowDays, setOptimizationWindowDays] = useState(1_460)
   const [optimizationStartDate, setOptimizationStartDate] = useState(DEFAULT_MISSION_CONFIG.startDate)
   const [optimizationThreshold, setOptimizationThreshold] = useState(95)
@@ -278,6 +280,12 @@ export function ThreeDView({
   const [activeInfoDrags, setActiveInfoDrags] = useState<Set<string>>(() => new Set())
   const [cameraFocusRequest, setCameraFocusRequest] = useState<CameraFocusRequest>({ kind: 'overview', view: 'perspective', requestId: 0 })
   const validationErrors = validateMissionConfig(draft)
+
+  useEffect(() => {
+    if (observedPlannedRouteRef.current === plannedRoute) return
+    observedPlannedRouteRef.current = plannedRoute
+    setRouteValidationPending(false)
+  }, [plannedRoute])
   const setEntryCorridor: Dispatch<SetStateAction<EntryCorridorDefinition>> = useCallback((action) => {
     onEntryCorridorChange((current) => {
       const next = typeof action === 'function' ? action(current) : action
@@ -399,7 +407,9 @@ export function ThreeDView({
     ?? plannedRoute?.trajectory.at(-1)?.elapsedDays
     ?? visibleMissionResult?.summary.totalFlightDays
     ?? 0
-  const plannedRouteIsExecutable = !plannedRoute || plannedRoute.summary.feasibleWithConfiguredBurn
+  const plannedRouteIsExecutable = !plannedRoute || (
+    plannedRoute.summary.feasibleWithConfiguredBurn && !routeValidationPending
+  )
   const canPlay = playbackEndDay > 0 && routePlanStatus !== 'review' && plannedRouteIsExecutable
   const activeStartDate = plannedRoute?.startDate ?? visibleMissionResult?.config.startDate ?? draft.startDate
 
@@ -999,6 +1009,11 @@ export function ThreeDView({
     aimpointAltitudeKm,
   ])
   const calculateWaypointRoute = async () => {
+    if (!plannedRoute) {
+      setRouteError('Bitte zuerst in der 2D-Planung eine Solver-Route auswählen. Diese wird anschließend mit dem Satelliten validiert.')
+      onOpenRoutePlanner()
+      return
+    }
     if (!selectedTarget && routeSections.length === 0) {
       setRouteError('Bitte zuerst ein interstellares Ziel wählen.')
       return
@@ -1012,6 +1027,7 @@ export function ThreeDView({
     setRouteError(null)
     setDirectSolarRoute(null)
     setOptimizationResult(null)
+    const sourceRoute = plannedRoute
     try {
       const response = await fetch('/api/route/simulate', {
         method: 'POST',
@@ -1031,6 +1047,13 @@ export function ThreeDView({
           entryCorridor,
           routeSections,
           routeSketch,
+          integrateSpacecraft: true,
+          sourceRoute: {
+            startDate: sourceRoute.startDate,
+            auditRunId: sourceRoute.audit?.runId ?? null,
+            persistenceRunId: sourceRoute.calculationPersistence?.runId ?? null,
+            persistenceVariantId: sourceRoute.calculationPersistence?.variantId ?? null,
+          },
         }),
       })
       const payload = await response.json() as WaypointRouteResult | { error?: string }
@@ -1041,12 +1064,16 @@ export function ThreeDView({
       setElapsedDays((payload as WaypointRouteResult).trajectory[0]?.elapsedDays ?? 0)
       setPlaying(false)
       setSelectedObject('probe')
+      setRouteValidationPending(false)
     } catch (error) {
-      setPlannedRoute(null)
-      setPlannedMissionDate(null)
-      setRoutePlanStatus('review')
-      setRouteDrawTool('move')
-      setRouteError(error instanceof Error ? error.message : 'Routenberechnung fehlgeschlagen.')
+      // Never destroy the selected solver geometry just because the chosen
+      // spacecraft cannot fly it. Keep it as the visible reference and ask
+      // for another validation after masses, stages or drives are adjusted.
+      setPlannedRoute(sourceRoute)
+      setPlannedMissionDate(sourceRoute.startDate)
+      setRoutePlanStatus('confirmed')
+      setRouteValidationPending(true)
+      setRouteError(`Satellit kann die ausgewählte Route noch nicht fliegen: ${error instanceof Error ? error.message : 'Validierung fehlgeschlagen.'}`)
     } finally {
       setRouteLoading(false)
     }
@@ -1372,7 +1399,7 @@ export function ThreeDView({
             <strong>Zeichenmodus aktiv</strong>
             <span>Werkzeug oben wählen · Entwurf bleibt erhalten</span>
           </> : plannedRoute ? <>
-            <span className={`mission-status ${plannedRoute.summary.solarDepartureInjectionApplied ? 'success' : 'warning'}`}>{plannedRoute.summary.solarDepartureInjectionApplied ? 'ROUTE' : 'SOLLROUTE'}</span>
+            <span className={`mission-status ${plannedRoute.summary.solarDepartureInjectionApplied && !routeValidationPending ? 'success' : 'warning'}`}>{routeValidationPending ? 'VALIDIEREN' : plannedRoute.summary.solarDepartureInjectionApplied ? 'ROUTE' : 'SOLLROUTE'}</span>
             <strong>{currentRouteSegment?.label ?? 'Wegpunktroute'}</strong>
             <span>Tag {elapsedDays.toFixed(1)} / {playbackEndDay.toFixed(0)}</span>
           </> : visibleMissionResult && currentPoint ? <>
@@ -1413,9 +1440,9 @@ export function ThreeDView({
               className="quick-route-calculate"
               type="button"
               disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)}
-              onClick={() => void calculateWaypointRoute()}
+              onClick={plannedRoute ? () => void calculateWaypointRoute() : onOpenRoutePlanner}
             >
-              {routeLoading ? 'Berechnet …' : 'Bahn berechnen'}
+              {routeLoading ? 'Validiert …' : !plannedRoute ? 'Solver-Route auswählen' : routeValidationPending ? 'Route mit Satellit validieren' : 'Satellit neu validieren'}
             </button>
             )}
           <button
@@ -1471,7 +1498,7 @@ export function ThreeDView({
             >
               {entryCorridorEditorOpen ? 'Korridor · offen' : 'Korridor zeichnen'}
             </button>
-            <button className="quick-route-calculate" type="button" disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={() => void calculateWaypointRoute()}>{routeLoading ? 'Berechnet …' : 'Bahn berechnen'}</button>
+            <button className="quick-route-calculate" type="button" disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={plannedRoute ? () => void calculateWaypointRoute() : onOpenRoutePlanner}>{routeLoading ? 'Validiert …' : !plannedRoute ? 'Solver-Route auswählen' : routeValidationPending ? 'Route mit Satellit validieren' : 'Satellit neu validieren'}</button>
           </>}
           {routePlanStatus !== 'review' && <>
             <button className={playing ? 'active' : ''} type="button" disabled={!canPlay || playbackAuditStatus === 'starting'} onClick={() => void toggleMissionPlayback()}>{playing ? 'Pause' : playbackAuditStatus === 'starting' ? 'Log startet …' : 'Mission abspielen'}</button>
@@ -1539,7 +1566,7 @@ export function ThreeDView({
                 </label>
                 <label className="parameter-field">
                   <span>Startdatum</span>
-                  <input type="date" value={draft.startDate} onChange={(event) => { setDraft((current) => ({ ...current, startDate: event.target.value })); invalidateRoutePlan(); setPlannedRoute(null) }} />
+                  <input type="date" value={draft.startDate} onChange={(event) => { setDraft((current) => ({ ...current, startDate: event.target.value })); abortActivePlayback('spacecraft-configuration-changed'); setRouteValidationPending(Boolean(plannedRoute)); setOptimizationPreflight(null) }} />
                 </label>
               </div>
               {(simulationError || validationErrors.length > 0) && <div className="validation-box" role="alert">{simulationError ?? validationErrors.join(' ')}</div>}
@@ -1820,8 +1847,13 @@ export function ThreeDView({
             </div>
           )}
           {plannedRoute && (
-            <span className={plannedRoute.summary.feasibleWithConfiguredBurn ? 'route-ok' : 'route-warning'}>
-              {plannedRoute.summary.feasibleWithConfiguredBurn ? 'Erreichbar' : 'Nicht erreichbar'} · Kurs-Δv {plannedRoute.summary.requiredInjectionDeltaVKmS.toFixed(2)} km/s · Swing-by {plannedRoute.summary.courseChangeDeg?.toFixed(1) ?? '–'}° · Geschwindigkeitsgewinn {plannedRoute.summary.speedGainKmS >= 0 ? '+' : ''}{plannedRoute.summary.speedGainKmS.toFixed(2)} km/s
+            <span className={plannedRoute.summary.feasibleWithConfiguredBurn && !routeValidationPending ? 'route-ok' : 'route-warning'}>
+              {routeValidationPending ? 'Solver-Route erhalten · Satellitenkonfiguration muss neu validiert werden' : plannedRoute.summary.feasibleWithConfiguredBurn ? 'Erreichbar' : 'Nicht erreichbar'} · Kurs-Δv {plannedRoute.summary.requiredInjectionDeltaVKmS.toFixed(2)} km/s · Swing-by {plannedRoute.summary.courseChangeDeg?.toFixed(1) ?? '–'}° · Geschwindigkeitsgewinn {plannedRoute.summary.speedGainKmS >= 0 ? '+' : ''}{plannedRoute.summary.speedGainKmS.toFixed(2)} km/s
+            </span>
+          )}
+          {plannedRoute?.spacecraftIntegration && !routeValidationPending && (
+            <span className="route-ok">
+              Satellit integriert · Startmasse {plannedRoute.spacecraftIntegration.wetMassKg.toLocaleString('de-DE')} kg · Oberth {plannedRoute.spacecraftIntegration.achievedOberthDeltaVKmS.toFixed(2)}/{plannedRoute.spacecraftIntegration.requestedOberthDeltaVKmS.toFixed(2)} km/s · Antriebe {plannedRoute.spacecraftIntegration.enabledPropulsionModules.filter(Boolean).join(', ') || 'keine'}
             </span>
           )}
           {plannedRoute?.validation && (
@@ -1952,7 +1984,7 @@ export function ThreeDView({
         onSelectObject={setSelectedObject}
         onSelectMoon={setSelectedMoon}
         onVisualChange={setVisual}
-        onDraftChange={(nextDraft) => { setDraft(nextDraft); invalidateRoutePlan(); setPlannedRoute(null); setDirectSolarRoute(null); setOptimizationResult(null) }}
+        onDraftChange={(nextDraft) => { setDraft(nextDraft); abortActivePlayback('spacecraft-configuration-changed'); setRouteValidationPending(Boolean(plannedRoute)); setOptimizationPreflight(null); setDirectSolarRoute(null); setOptimizationResult(null); setRouteError(null) }}
       />
       {visual.showScaleNotice && (
         <p className="floating-scale-note">Orbitale Darstellung: {visual.orbitScale} × √AE · Neigungen vertikal ×{visual.inclinationScale} · Körperradien proportional zueinander · Missionsbahn RK4 / N-Körper</p>

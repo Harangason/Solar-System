@@ -35,10 +35,12 @@ export function constellationSearchWindow(
 ): ConstellationSearchWindow {
   const relevantPeriods = orbitalPeriodsDays.filter((periodDays) => periodDays > 0)
   const longestRelevantPeriodDays = Math.max(YEAR_DAYS, ...relevantPeriods)
-  const searchStartDay = -Math.min(730, Math.ceil(longestRelevantPeriodDays / 2))
+  const removedLookbackDays = Math.min(730, Math.ceil(longestRelevantPeriodDays / 2))
+  const searchStartDay = 0
   const searchEndDay = Math.min(
     Math.ceil(60 * YEAR_DAYS),
-    Math.max(Math.ceil(20 * YEAR_DAYS), Math.ceil(longestRelevantPeriodDays * 2.15)),
+    Math.max(Math.ceil(20 * YEAR_DAYS), Math.ceil(longestRelevantPeriodDays * 2.15))
+      + removedLookbackDays,
   )
   const targetBroadSamples = clamp(
     1_800 + relevantPeriods.length * 600 + Math.max(1, routeSectionCount) * 500,

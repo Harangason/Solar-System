@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from generic_route_planner import SUN_RADIUS_KM, _candidate, parse_route_passage
 from multi_route_planner import simulate_route_sections
@@ -39,6 +41,39 @@ class GenericRoutePlannerTests(unittest.TestCase):
         self.assertEqual(calculated["targetId"], "sun")
         self.assertEqual(calculated["sectionType"], "heliozentrischer Transfer")
         self.assertLess(calculated["lambertEndpointResidualKm"], 1.0)
+
+    def test_spacecraft_integration_preserves_route_and_reports_actual_vehicle(self):
+        mission = SimpleNamespace(
+            config=SimpleNamespace(
+                payload_mass_kg=120.0,
+                carrier_mass_kg=1_200.0,
+                heatshield_mass_kg=450.0,
+                propellant_mass_kg=7_200.0,
+                oberth_delta_v_km_s=8.0,
+            ),
+            summary=SimpleNamespace(
+                achieved_burn_delta_v_km_s=6.5,
+                propellant_used_kg=6_800.0,
+                propulsion_report=[
+                    {"name": "Solar-Oberth", "enabled": True},
+                    {"name": "Ion", "enabled": False},
+                ],
+                warnings=["Burn durch Treibstoff begrenzt."],
+            ),
+        )
+        with patch("planner.generic_route_planner.simulate_mission", return_value=mission):
+            result = simulate_route_sections({
+                "mission": {"startDate": "2026-07-28", "oberthDeltaVKmS": 8.0},
+                "routeSections": [section("venus", "sun")],
+                "integrateSpacecraft": True,
+            })
+
+        integrated = result["spacecraftIntegration"]
+        self.assertTrue(integrated["validated"])
+        self.assertTrue(integrated["routeGeometryPreserved"])
+        self.assertEqual(integrated["wetMassKg"], 8_970.0)
+        self.assertEqual(integrated["achievedOberthDeltaVKmS"], 6.5)
+        self.assertEqual(integrated["enabledPropulsionModules"], ["Solar-Oberth"])
 
     def test_passage_definition_is_normalized_and_preserved(self):
         requested = section("venus", "sun")
@@ -317,9 +352,18 @@ class GenericRoutePlannerTests(unittest.TestCase):
         self.assertEqual(calculated_jupiter["lookaheadTargetId"], "proxima-centauri")
         self.assertLess(result["summary"]["actualTargetAlignmentDeg"], 2.0)
         self.assertLess(result["summary"]["targetCorrectionDeltaVKmS"], 3.0)
-        # The coupling exposes rather than hides the still-unavailable burn
-        # between the high-energy solar exit and Jupiter.
-        self.assertGreater(calculated_jupiter["requiredTransitionDeltaVKmS"], 0.5)
+        # Passage phase, plane and transfer time must be solved together. The
+        # former sequential optimisation left a large artificial burn here.
+        solar_selection = calculated_solar["corridor"]["exitAngleSelection"]
+        self.assertLess(solar_selection["predictedTransitionDeltaVKmS"], 0.01)
+        self.assertLess(calculated_jupiter["requiredTransitionDeltaVKmS"], 0.01)
+        self.assertAlmostEqual(
+            calculated_jupiter["entryDay"] - calculated_solar["exitDay"],
+            solar_selection["transferPreviewDays"],
+            places=6,
+        )
+        # This three-leg case still lacks the configured Jupiter-to-Proxima
+        # injection; that is independent of the now-passive solar handoff.
         self.assertFalse(result["summary"]["feasibleWithConfiguredBurn"])
 
     def test_unsafe_lambert_fallback_is_rejected(self):
