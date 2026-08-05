@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useRef,
   useState,
   type Dispatch,
@@ -145,6 +146,15 @@ export function PlanetCorridorPlanner({
   const localPlanetMoons = localPlanet
     ? moons.filter((moon) => moon.parentId === localPlanet.id)
     : []
+  const autoProjectionTargetRef = useRef('')
+
+  useEffect(() => {
+    const targetKey = `${waypointId}:${localPlanet?.id ?? ''}`
+    if (autoProjectionTargetRef.current === targetKey) return
+    autoProjectionTargetRef.current = targetKey
+    if (localPlanet && waypointId !== 'sun' && !isInterstellarTarget) setProjection('local3d')
+    else if (projection === 'local3d') setProjection(mainProjection)
+  }, [isInterstellarTarget, localPlanet?.id, mainProjection, projection, waypointId])
   const targetPhysics: CorridorTargetPhysics = {
     radiusKm: selectedTarget && 'radiusKm' in selectedTarget ? selectedTarget.radiusKm : undefined,
     surfaceGravity: selectedTarget && 'surfaceGravity' in selectedTarget ? selectedTarget.surfaceGravity : undefined,

@@ -595,6 +595,11 @@ button { font: inherit; }
 .route-calculation-dialog > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 20px; border-top: 1px solid rgba(255,255,255,.09); background: rgba(2,7,18,.8); }
 .route-calculation-dialog > footer p { margin: 0; color: #7991a6; font-size: .62rem; }
 .route-calculation-dialog > footer button { padding: 8px 13px; border: 1px solid #c9a8ff; border-radius: 8px; color: #0b1020; background: #c9a8ff; cursor: pointer; font-size: .68rem; font-weight: 800; }
+.route-calculation-dialog > footer button:disabled { cursor: not-allowed; opacity: .4; }
+.calculation-footer-actions { display: flex; gap: 8px; }
+.route-calculation-dialog > footer button.secondary { color: #c9a8ff; background: transparent; }
+.solver-route-launcher { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; background: rgba(0,3,10,.78); backdrop-filter: blur(7px); }
+.solver-route-launcher > div { padding: 18px 22px; border: 1px solid rgba(181,133,255,.42); border-radius: 14px; color: #e9ddff; background: #081121; box-shadow: 0 24px 80px rgba(0,0,0,.7); }
 
 .calculation-geometry-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; padding: 24px; place-items: center; background: rgba(0,3,10,.78); backdrop-filter: blur(7px); }
 .calculation-geometry-popup { display: grid; width: min(1040px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); overflow: auto; border: 1px solid rgba(121,228,255,.34); border-radius: 18px; color: #eaf8ff; background: #07101e; box-shadow: 0 28px 100px rgba(0,0,0,.78); }

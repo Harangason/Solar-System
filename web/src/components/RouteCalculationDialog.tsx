@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 
+import { rankRouteCandidates } from '../routeCandidateSelection'
+
 export type RouteCalculationCandidateStatus =
   | 'running'
   | 'geometry-valid'
@@ -79,6 +81,9 @@ interface RouteCalculationDialogProps {
   historyLoading: boolean
   onRunSelect: (runId: string) => void
   onClose: () => void
+  selectionMode?: boolean
+  selectableCandidateIds?: string[]
+  onCandidateApply?: (candidateId: string) => void
 }
 
 const STAGE_NAMES: Record<string, string> = {
@@ -703,6 +708,9 @@ export function RouteCalculationDialog({
   historyLoading,
   onRunSelect,
   onClose,
+  selectionMode = false,
+  selectableCandidateIds = [],
+  onCandidateApply,
 }: RouteCalculationDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const [stageFilter, setStageFilter] = useState('all')
@@ -724,12 +732,21 @@ export function RouteCalculationDialog({
     [trace.candidates],
   )
   const filteredCandidates = useMemo(
-    () => trace.candidates.filter((candidate) => stageFilter === 'all' || candidate.stage === stageFilter),
-    [stageFilter, trace.candidates],
+    () => rankRouteCandidates(
+      trace.candidates.filter((candidate) => (
+        (!selectionMode || candidate.fullCorridorCheck)
+        && (stageFilter === 'all' || candidate.stage === stageFilter)
+      )),
+    ),
+    [selectionMode, stageFilter, trace.candidates],
   )
   const selectedCandidate = (
     filteredCandidates.find((candidate) => candidate.id === selectedId)
-    ?? filteredCandidates.at(-1)
+    ?? filteredCandidates[0]
+  )
+  const selectableIds = useMemo(() => new Set(selectableCandidateIds), [selectableCandidateIds])
+  const selectedCandidateCanApply = Boolean(
+    selectedCandidate && selectableIds.has(selectedCandidate.id),
   )
   const selectedRoutePath = routePath(selectedCandidate?.routePoints)
   const solvedCount = trace.candidates.filter((candidate) => candidate.status !== 'running').length
@@ -769,7 +786,7 @@ export function RouteCalculationDialog({
       <header>
         <div>
           <small>{trace.running ? 'Live · Solver läuft' : 'Abgeschlossener Solverlauf'}</small>
-          <h2 id="route-calculation-title">Routenberechnungen analysieren</h2>
+          <h2 id="route-calculation-title">{selectionMode ? 'Beste Solver-Route auswählen' : 'Routenberechnungen analysieren'}</h2>
           <p>{trace.routeLabel}</p>
         </div>
         <div className="calculation-dialog-actions">
@@ -910,11 +927,11 @@ export function RouteCalculationDialog({
           <table className="calculation-table">
             <thead>
               <tr>
-                <th>#</th><th>Datum</th><th>Stufe</th><th>Status</th><th>Qualität</th><th>Δv Soll</th><th>Δv Defizit</th><th>Zielrest</th>
+                <th>{selectionMode ? 'Rang' : '#'}</th><th>Datum</th><th>Stufe</th><th>Status</th><th>Qualität</th><th>Δv Soll</th><th>Δv Defizit</th><th>Zielrest</th>
               </tr>
             </thead>
             <tbody>
-              {filteredCandidates.map((candidate) => (
+              {filteredCandidates.map((candidate, index) => (
                 <tr
                   key={candidate.id}
                   className={candidate.id === selectedCandidate?.id ? 'is-selected' : ''}
@@ -926,7 +943,7 @@ export function RouteCalculationDialog({
                       aria-label={`Variante ${candidate.iteration} auswählen`}
                       onClick={() => setSelectedId(candidate.id)}
                     >
-                      {candidate.iteration}
+                      {selectionMode ? index + 1 : candidate.iteration}
                     </button>
                   </td>
                   <td>{candidate.date}</td>
@@ -944,8 +961,25 @@ export function RouteCalculationDialog({
       </div>
 
       <footer>
-        <p>{trace.running ? `Suche läuft bis mindestens ${targetGoodResults} gute Resultate gefunden oder alle Passagevarianten ausgeschöpft sind.` : `${trace.candidates.length} Solvervarianten protokolliert. ${trace.stopReason ?? ''}`}</p>
-        <button type="button" onClick={onClose}>Schließen</button>
+        <p>{selectionMode && !trace.running && !selectedCandidateCanApply
+          ? 'Nur vollständig geprüfte, flugfähige Kandidaten aus diesem aktuellen Solverlauf können übernommen werden.'
+          : trace.running
+            ? `Suche läuft bis mindestens ${targetGoodResults} gute Resultate gefunden oder alle Passagevarianten ausgeschöpft sind.`
+            : `${trace.candidates.length} Solvervarianten protokolliert. ${trace.stopReason ?? ''}`}</p>
+        <div className="calculation-footer-actions">
+          {selectionMode
+            ? (
+              <button
+                type="button"
+                disabled={trace.running || !selectedCandidateCanApply}
+                onClick={() => selectedCandidate && onCandidateApply?.(selectedCandidate.id)}
+              >
+                Ausgewählte Route übernehmen
+              </button>
+            )
+            : null}
+          <button type="button" className={selectionMode ? 'secondary' : undefined} onClick={onClose}>Schließen</button>
+        </div>
       </footer>
       {geometryPopupOpen ? <GeometryGraphPopup trace={trace} onClose={() => setGeometryPopupOpen(false)} /> : null}
       {shortlistPopupOpen

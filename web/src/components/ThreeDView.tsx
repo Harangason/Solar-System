@@ -22,6 +22,7 @@ import { DEFAULT_MISSION_CONFIG, requestMissionSimulation, validateMissionConfig
 import { planetPositionAt } from '../orbitalMath'
 import { appendPlaybackAuditEvent, startPlaybackAudit, type PlaybackEventType, type PlaybackStateSnapshot } from '../playbackAudit'
 import type { RouteSectionDefinition } from '../routeSections'
+import { routeSectionsBlockReason } from '../routeSectionValidation'
 import { popSketchHistory, removeSketchSelection } from '../routeSketchState'
 import type { MissionConfig, MissionResult, MoonCatalogue, MoonData, PlanetData, SolarSystemData, VisualConfig } from '../types'
 import { MissionTrajectory } from './MissionTrajectory'
@@ -81,11 +82,6 @@ const WEBGL_RENDERER_OPTIONS: THREE.WebGLRendererParameters = {
 const WEBGL_CAMERA = { position: [46, 38, 58] as [number, number, number], fov: 48, near: 0.0001, far: 2_000 }
 type AimpointRole = 'entry' | 'periapsis' | 'exit' | 'periapsis_point'
 
-function routePassageCalculationBlockReason(routeSections: RouteSectionDefinition[]) {
-  void routeSections
-  return null
-}
-
 function scaledRadius(planet: PlanetData, sunRadiusKm: number, visual: VisualConfig) {
   const readableSunReferenceRadius = 0.85
   return readableSunReferenceRadius * (planet.radiusKm / sunRadiusKm) * visual.planetScale
@@ -122,6 +118,7 @@ interface ThreeDViewProps {
   plannedRoute: WaypointRouteResult | null
   onPlannedRouteChange: Dispatch<SetStateAction<WaypointRouteResult | null>>
   onOpenRoutePlanner: () => void
+  onOpenRouteSelector: () => void
   restoredMissionConfig: MissionConfig | null
   restoredVisualConfig: VisualConfig | null
   restoredMissionResult: MissionResult | null
@@ -169,6 +166,7 @@ export function ThreeDView({
   plannedRoute,
   onPlannedRouteChange: setPlannedRoute,
   onOpenRoutePlanner,
+  onOpenRouteSelector,
   restoredMissionConfig,
   restoredVisualConfig,
   restoredMissionResult,
@@ -303,7 +301,7 @@ export function ThreeDView({
   const corridorRequiresDynamicCheck = corridorBlocked && routeSections.length > 0
   const corridorBlockMessage = entryCorridor.blockReasons?.join(' ')
     || 'Der Zielkorridor verletzt den Mindestabstand oder liegt auf der vom Ursprung abgewandten Seite.'
-  const routeCalculationBlockReason = routePassageCalculationBlockReason(routeSections)
+  const routeCalculationBlockReason = routeSectionsBlockReason(routeSections)
 
   useEffect(() => {
     if (!plannedMissionDate || draft.startDate === plannedMissionDate) return
@@ -1010,8 +1008,8 @@ export function ThreeDView({
   ])
   const calculateWaypointRoute = async () => {
     if (!plannedRoute) {
-      setRouteError('Bitte zuerst in der 2D-Planung eine Solver-Route auswählen. Diese wird anschließend mit dem Satelliten validiert.')
-      onOpenRoutePlanner()
+      setRouteError(null)
+      onOpenRouteSelector()
       return
     }
     if (!selectedTarget && routeSections.length === 0) {
@@ -1440,7 +1438,7 @@ export function ThreeDView({
               className="quick-route-calculate"
               type="button"
               disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)}
-              onClick={plannedRoute ? () => void calculateWaypointRoute() : onOpenRoutePlanner}
+              onClick={plannedRoute ? () => void calculateWaypointRoute() : onOpenRouteSelector}
             >
               {routeLoading ? 'Validiert …' : !plannedRoute ? 'Solver-Route auswählen' : routeValidationPending ? 'Route mit Satellit validieren' : 'Satellit neu validieren'}
             </button>
@@ -1498,7 +1496,7 @@ export function ThreeDView({
             >
               {entryCorridorEditorOpen ? 'Korridor · offen' : 'Korridor zeichnen'}
             </button>
-            <button className="quick-route-calculate" type="button" disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={plannedRoute ? () => void calculateWaypointRoute() : onOpenRoutePlanner}>{routeLoading ? 'Validiert …' : !plannedRoute ? 'Solver-Route auswählen' : routeValidationPending ? 'Route mit Satellit validieren' : 'Satellit neu validieren'}</button>
+            <button className="quick-route-calculate" type="button" disabled={routeLoading || Boolean(routeCalculationBlockReason) || (corridorBlocked && !corridorRequiresDynamicCheck)} onClick={plannedRoute ? () => void calculateWaypointRoute() : onOpenRouteSelector}>{routeLoading ? 'Validiert …' : !plannedRoute ? 'Solver-Route auswählen' : routeValidationPending ? 'Route mit Satellit validieren' : 'Satellit neu validieren'}</button>
           </>}
           {routePlanStatus !== 'review' && <>
             <button className={playing ? 'active' : ''} type="button" disabled={!canPlay || playbackAuditStatus === 'starting'} onClick={() => void toggleMissionPlayback()}>{playing ? 'Pause' : playbackAuditStatus === 'starting' ? 'Log startet …' : 'Mission abspielen'}</button>

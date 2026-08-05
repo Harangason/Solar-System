@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from ai.evaluation import train_and_evaluate
 from scripts.train_saved_project import (

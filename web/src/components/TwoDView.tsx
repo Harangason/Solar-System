@@ -59,6 +59,8 @@ interface TwoDViewProps {
     route: WaypointRouteResult,
   ) => void
   missionConfig: MissionConfig | null
+  solverDialogOnly?: boolean
+  onSolverDialogClose?: () => void
 }
 
 interface ConstellationSearchResult {
@@ -507,6 +509,8 @@ export function TwoDView({
   plannedRoute,
   onApplyPlannedSolution,
   missionConfig,
+  solverDialogOnly = false,
+  onSolverDialogClose,
 }: TwoDViewProps) {
   const [data, setData] = useState<SolarSystemData | null>(null)
   const [moonCatalogue, setMoonCatalogue] = useState<MoonCatalogue | null>(null)
@@ -524,6 +528,8 @@ export function TwoDView({
   const [routeCalculationDialogOpen, setRouteCalculationDialogOpen] = useState(false)
   const [calculationRunHistory, setCalculationRunHistory] = useState<RouteCalculationRunSummary[]>([])
   const [calculationHistoryLoading, setCalculationHistoryLoading] = useState(false)
+  const solverAutoStartedRef = useRef(false)
+  const searchCancelledRef = useRef(false)
   const [aiChatInput, setAiChatInput] = useState('')
   const [aiChatLoading, setAiChatLoading] = useState(false)
   const [aiChatError, setAiChatError] = useState('')
@@ -658,6 +664,7 @@ export function TwoDView({
   }, [projectId])
 
   useEffect(() => () => {
+    searchCancelledRef.current = true
     aiRecordingStreamRef.current?.getTracks().forEach((track) => track.stop())
     aiPlaybackRef.current?.pause()
     if (aiPlaybackUrlRef.current) URL.revokeObjectURL(aiPlaybackUrlRef.current)
@@ -1277,6 +1284,7 @@ export function TwoDView({
       setConstellationSearchStatus('Keine Route vorhanden.')
       return
     }
+    searchCancelledRef.current = false
     searchRunningRef.current = true
     setConstellationSearchRunning(true)
     let activeMLRanker: MLCandidateRanker | null = null
@@ -1650,6 +1658,7 @@ export function TwoDView({
         stage: string,
         iteration: number,
       ): Promise<SolvedCandidate | null> => {
+        if (searchCancelledRef.current) return null
         const startDate = dateFromTimestamp(candidate.timestamp)
         const candidateTraceId = `pending:${searchRunId}:${iteration}`
         const runningTrace: RouteCalculationCandidateTrace = {
@@ -1702,6 +1711,7 @@ export function TwoDView({
           error?: string
           calculationVariantId?: string
         }
+        if (searchCancelledRef.current) return null
         if (!response.ok || 'error' in payload) {
           const message = 'error' in payload && payload.error ? payload.error : `HTTP ${response.status}`
           const structural = /keine lokale Ephemeride|benötigt zuerst|kann nur der letzte|Mindestens ein 2D-Routenabschnitt|Endpunkt/.test(message)
@@ -1867,7 +1877,7 @@ export function TwoDView({
       const preflightCandidates: SolvedCandidate[] = []
       const solvedTimestamps = new Set<number>()
       let solverIteration = 0
-      for (let index = 0; index < geometricShortlist.length; index += 1) {
+      for (let index = 0; index < geometricShortlist.length && !searchCancelledRef.current; index += 1) {
         const candidate = geometricShortlist[index]
         const startDate = dateFromTimestamp(candidate.timestamp)
         setConstellationSearchStatus(`Dynamische Vorprüfung ${index + 1}/${geometricShortlist.length}: ${new Date(`${startDate}T00:00:00Z`).toLocaleDateString('de-DE', { timeZone: 'UTC' })}`)
@@ -1886,7 +1896,7 @@ export function TwoDView({
         Math.max(180, Math.min(730, longestRelevantPeriodDays / 10)),
       )
       const refinementFrontier = refinementSeeds.map((solved) => ({ solved, level: 0 }))
-      while (refinementFrontier.length > 0 && solverIteration < preflightSolverBudget) {
+      while (refinementFrontier.length > 0 && solverIteration < preflightSolverBudget && !searchCancelledRef.current) {
         const parent = refinementFrontier.shift()
         if (!parent || parent.level >= 4) continue
         const neighbors = temporalRefinementNeighbors(
@@ -1898,7 +1908,7 @@ export function TwoDView({
           .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
           .filter((candidate) => !solvedTimestamps.has(candidate.timestamp))
         const solvedNeighbors: SolvedCandidate[] = []
-        for (let index = 0; index < neighbors.length; index += 1) {
+        for (let index = 0; index < neighbors.length && !searchCancelledRef.current; index += 1) {
           if (solverIteration >= preflightSolverBudget) break
           const candidate = neighbors[index]
           const startDate = dateFromTimestamp(candidate.timestamp)
@@ -1958,7 +1968,7 @@ export function TwoDView({
         )
       )
       let goodSolvedCandidateCount = 0
-      for (let index = 0; index < fullValidationShortlist.length; index += 1) {
+      for (let index = 0; index < fullValidationShortlist.length && !searchCancelledRef.current; index += 1) {
         const candidate = fullValidationShortlist[index].candidate
         const startDate = dateFromTimestamp(candidate.timestamp)
         setConstellationSearchStatus(`Korridor-Vollprüfung ${index + 1}/${fullValidationShortlist.length}: ${new Date(`${startDate}T00:00:00Z`).toLocaleDateString('de-DE', { timeZone: 'UTC' })}`)
@@ -2003,6 +2013,7 @@ export function TwoDView({
           && goodSolvedCandidateCount < TARGET_GOOD_CONSTELLATION_RESULTS;
         adaptiveRound += 1
       ) {
+        if (searchCancelledRef.current) break
         const adaptiveCandidates = adaptiveSeeds.flatMap((seed) => (
           adaptivePassageVariants(seed.sections, adaptiveRound)
             .map((sections) => ({ ...seed, sections }))
@@ -2027,7 +2038,7 @@ export function TwoDView({
             : current
         ))
         await persistRunUpdate({ fullValidationBudget: scheduledFullValidationCount })
-        for (let index = 0; index < adaptiveCandidates.length; index += 1) {
+        for (let index = 0; index < adaptiveCandidates.length && !searchCancelledRef.current; index += 1) {
           if (goodSolvedCandidateCount >= TARGET_GOOD_CONSTELLATION_RESULTS) break
           const candidate = adaptiveCandidates[index]
           const startDate = dateFromTimestamp(candidate.timestamp)
@@ -2056,6 +2067,7 @@ export function TwoDView({
           }
         }
       }
+      if (searchCancelledRef.current) return
       const rankedResults: ConstellationSearchResult[] = solvedCandidates
         .map((solved) => {
           const flightReady = (
@@ -2139,9 +2151,6 @@ export function TwoDView({
         : `Alle Zeit- und Passagevarianten ausgeschöpft: ${goodResultCount}/${TARGET_GOOD_CONSTELLATION_RESULTS} gute Resultate. Verbleibende harte Randbedingungen oder Δv-Grenzen verhindern weitere gültige Lösungen.`
       setConstellationResults(rankedResults)
       setSelectedConstellationResultId(bestResult.id)
-      if (bestResult.flightReady || bestResult.hypotheticalInterstellarAsymptote) {
-        onApplyPlannedSolution(bestDate, best.candidate.sections, best.route)
-      }
       const deltaVDeficitKmS = Math.max(
         0,
         best.requiredInjectionDeltaVKmS
@@ -2158,7 +2167,7 @@ export function TwoDView({
         await persistVariantUpdate(result.id, {
           status: result.flightReady ? 'performance-valid' : result.good ? 'success' : 'rejected',
           rank: index + 1,
-          selected: index === 0,
+          selected: false,
           feasible: result.flightReady,
           corridorSatisfied: result.corridorSatisfied,
           collisionFree: result.collisionFree,
@@ -2238,6 +2247,13 @@ export function TwoDView({
         }
       }
     } finally {
+      if (searchCancelledRef.current && searchRunId) {
+        try {
+          await persistRunUpdate({ status: 'cancelled', error: 'Solverlauf vom Nutzer abgebrochen.' })
+        } catch {
+          // The closed dialog must stay closed if persisting cancellation fails.
+        }
+      }
       searchRunningRef.current = false
       setConstellationSearchRunning(false)
       setRouteCalculationTrace((current) => (
@@ -2271,8 +2287,24 @@ export function TwoDView({
     const result = constellationResults.find((item) => item.id === resultId)
     if (!result) return
     setSelectedConstellationResultId(result.id)
-    if (result.flightReady || result.hypotheticalInterstellarAsymptote) {
+    if (result.flightReady) {
+      const runId = result.route.calculationPersistence?.runId
+      if (runId) {
+        void fetch(
+          `/api/calculations/runs/${encodeURIComponent(runId)}/variants/${encodeURIComponent(result.id)}`,
+          {
+            method: 'PATCH',
+            headers: activityRequestHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ selected: true }),
+          },
+        ).catch((reason: unknown) => {
+          setConstellationSearchStatus(
+            `Auswahl konnte nicht gespeichert werden: ${reason instanceof Error ? reason.message : String(reason)}`,
+          )
+        })
+      }
       onApplyPlannedSolution(result.date, result.sections, result.route)
+      if (solverDialogOnly) onSolverDialogClose?.()
     }
     const deficitKmS = Math.max(
       0,
@@ -2283,9 +2315,7 @@ export function TwoDView({
     setConstellationSearchStatus(
       `${result.flightReady
         ? 'Flugfähige Lösung übernommen'
-        : result.hypotheticalInterstellarAsymptote
-          ? 'Hypothetische 50-AE-Zielrichtung dargestellt'
-          : 'Geometrisch gültige Diagnose · nicht übernommen'} `
+        : 'Geometrisch gültige Diagnose · nicht übernommen'} `
       + `${new Date(`${result.date}T00:00:00Z`).toLocaleDateString('de-DE', { timeZone: 'UTC' })}`
       + ` · Δv-Defizit ${deficitKmS.toFixed(2)} km/s`
       + ` · Zielrest ${result.targetAlignmentDeg.toFixed(1)}°`,
@@ -2304,8 +2334,43 @@ export function TwoDView({
     })
   }
 
-  if (error) return <div className="status-message">{error}</div>
-  if (!data) return <div className="status-message">2D-Orbitalplaner wird geladen …</div>
+  useEffect(() => {
+    if (!solverDialogOnly || !data || solverAutoStartedRef.current) return
+    solverAutoStartedRef.current = true
+    if (routeSections.length === 0) {
+      setConstellationSearchStatus('Bitte zuerst eine Route mit mindestens einem Abschnitt anlegen.')
+      return
+    }
+    void findBestConstellation()
+  }, [data, solverDialogOnly])
+
+  if (error) return solverDialogOnly
+    ? <div className="solver-route-launcher"><div>{error}<button type="button" onClick={onSolverDialogClose}>Schließen</button></div></div>
+    : <div className="status-message">{error}</div>
+  if (!data) return solverDialogOnly
+    ? <div className="solver-route-launcher"><div>Solver-Auswahl wird vorbereitet …</div></div>
+    : <div className="status-message">2D-Orbitalplaner wird geladen …</div>
+
+  if (solverDialogOnly) {
+    return (
+      <div className="solver-route-launcher">
+        {!routeCalculationDialogOpen || !routeCalculationTrace
+          ? <div>{constellationSearchStatus || 'Solver wird vorbereitet …'}</div>
+          : (
+            <RouteCalculationDialog
+              trace={routeCalculationTrace}
+              availableRuns={calculationRunHistory}
+              historyLoading={calculationHistoryLoading}
+              onRunSelect={(runId) => void loadPersistedCalculationRun(runId)}
+              onClose={() => onSolverDialogClose?.()}
+              selectionMode
+              selectableCandidateIds={constellationResults.filter((result) => result.flightReady).map((result) => result.id)}
+              onCandidateApply={applyConstellationResult}
+            />
+          )}
+      </div>
+    )
+  }
 
   const invalidateConstellationResults = () => {
     setConstellationResults([])
@@ -2932,6 +2997,8 @@ export function TwoDView({
             historyLoading={calculationHistoryLoading}
             onRunSelect={(runId) => void loadPersistedCalculationRun(runId)}
             onClose={() => setRouteCalculationDialogOpen(false)}
+            selectableCandidateIds={constellationResults.filter((result) => result.flightReady).map((result) => result.id)}
+            onCandidateApply={applyConstellationResult}
           />
         )
         : null}
