@@ -63,6 +63,8 @@ export interface RouteCalculationTrace {
   goodResultCount?: number
   targetGoodResults?: number
   adaptiveRound?: number
+  progressPercent?: number
+  progressMessage?: string
   stopReason?: string
   bestDate?: string
   error?: string
@@ -117,6 +119,14 @@ function metric(value: number | undefined, digits = 1) {
 
 function stageName(stage: string) {
   return STAGE_NAMES[stage] ?? stage
+}
+
+function friendlyCalculationError(message: string | undefined) {
+  if (!message) return ''
+  if (/failed to fetch/i.test(message)) {
+    return 'Backend nicht erreichbar oder waehrend der Berechnung neu gestartet. Der Lauf wurde unterbrochen; bitte Serverstatus pruefen und den Solverlauf erneut starten.'
+  }
+  return message
 }
 
 function candidateDeficit(candidate: RouteCalculationCandidateTrace) {
@@ -714,6 +724,14 @@ export function RouteCalculationDialog({
 }: RouteCalculationDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const [stageFilter, setStageFilter] = useState('all')
+  const [tableFilters, setTableFilters] = useState({
+    query: '',
+    date: '',
+    stage: 'all',
+    status: 'all',
+    qualityMin: '',
+    qualityMax: '',
+  })
   const [selectedId, setSelectedId] = useState('')
   const [geometryPopupOpen, setGeometryPopupOpen] = useState(false)
   const [shortlistPopupOpen, setShortlistPopupOpen] = useState(false)
@@ -740,6 +758,37 @@ export function RouteCalculationDialog({
     ),
     [selectionMode, stageFilter, trace.candidates],
   )
+  const tableCandidates = useMemo(() => {
+    const query = tableFilters.query.trim().toLowerCase()
+    const qualityMin = tableFilters.qualityMin === '' ? undefined : Number(tableFilters.qualityMin)
+    const qualityMax = tableFilters.qualityMax === '' ? undefined : Number(tableFilters.qualityMax)
+    return filteredCandidates.filter((candidate) => {
+      const statusLabel = STATUS_NAMES[candidate.status] ?? candidate.status
+      const searchable = [
+        String(candidate.iteration),
+        candidate.date,
+        stageName(candidate.stage),
+        statusLabel,
+        candidate.message ?? '',
+      ].join(' ').toLowerCase()
+      return (
+        (!query || searchable.includes(query))
+        && (!tableFilters.date || candidate.date.includes(tableFilters.date))
+        && (tableFilters.stage === 'all' || candidate.stage === tableFilters.stage)
+        && (tableFilters.status === 'all' || candidate.status === tableFilters.status)
+        && (!Number.isFinite(qualityMin) || (finite(candidate.quality) && candidate.quality >= qualityMin!))
+        && (!Number.isFinite(qualityMax) || (finite(candidate.quality) && candidate.quality <= qualityMax!))
+      )
+    })
+  }, [filteredCandidates, tableFilters])
+  const resetTableFilters = () => setTableFilters({
+    query: '',
+    date: '',
+    stage: 'all',
+    status: 'all',
+    qualityMin: '',
+    qualityMax: '',
+  })
   const selectedCandidate = (
     filteredCandidates.find((candidate) => candidate.id === selectedId)
     ?? filteredCandidates[0]
@@ -770,6 +819,22 @@ export function RouteCalculationDialog({
   )
     ? selectedCandidate.requiredInjectionDeltaVKmS - comparisonCandidate.requiredInjectionDeltaVKmS
     : undefined
+  const fallbackProgress = Math.min(99, Math.round(
+    solvedCount / Math.max(1, trace.preflightBudget + trace.fullValidationBudget) * 100,
+  ))
+  const progressPercent = trace.running
+    ? Math.max(0, Math.min(99, Math.round(trace.progressPercent ?? fallbackProgress)))
+    : 100
+  const progressState = trace.running
+    ? 'running'
+    : trace.error
+      ? 'error'
+      : 'complete'
+  const progressMessage = trace.running
+    ? trace.progressMessage ?? 'Solverlauf wird vorbereitet …'
+    : trace.error
+      ? 'Berechnung mit Fehler beendet.'
+      : trace.stopReason ?? `Berechnung abgeschlossen · ${trace.resultCount} Ergebnisse.`
 
   return (
     <dialog
@@ -809,6 +874,27 @@ export function RouteCalculationDialog({
       </header>
 
       <div className="route-calculation-content">
+        <section
+          className={`calculation-progress is-${progressState}`}
+          aria-label="Berechnungsfortschritt"
+          aria-live="polite"
+        >
+          <div>
+            <strong>{progressPercent}%</strong>
+            <span>{progressMessage}</span>
+          </div>
+          <div
+            className="calculation-progress-track"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent}
+            aria-valuetext={`${progressPercent} Prozent · ${progressMessage}`}
+          >
+            <i style={{ width: `${progressPercent}%` }} />
+          </div>
+        </section>
+
         <section className="calculation-funnel" aria-label="Suchtrichter">
           <article className="is-interactive">
             <button type="button" aria-label={`${trace.graphNodes.toLocaleString('de-DE')} Geometriepunkte als Ansicht öffnen`} onClick={() => setGeometryPopupOpen(true)}>
@@ -840,7 +926,7 @@ export function RouteCalculationDialog({
           <span>{trace.flightReadyCount} strikt flugfähig</span>
         </div>
 
-        {trace.error ? <p className="calculation-error">{trace.error}</p> : null}
+        {trace.error ? <p className="calculation-error">{friendlyCalculationError(trace.error)}</p> : null}
         {trace.stopReason
           ? <p className={goodResultCount >= targetGoodResults ? 'calculation-empty' : 'calculation-error'}>{trace.stopReason}</p>
           : null}
@@ -929,9 +1015,66 @@ export function RouteCalculationDialog({
               <tr>
                 <th>{selectionMode ? 'Rang' : '#'}</th><th>Datum</th><th>Stufe</th><th>Status</th><th>Qualität</th><th>Δv Soll</th><th>Δv Defizit</th><th>Zielrest</th>
               </tr>
+              <tr className="calculation-table-filters">
+                <th>
+                  <button type="button" onClick={resetTableFilters}>Reset</button>
+                </th>
+                <th>
+                  <input
+                    type="search"
+                    placeholder="Datum"
+                    value={tableFilters.date}
+                    onChange={(event) => setTableFilters((current) => ({ ...current, date: event.target.value }))}
+                  />
+                </th>
+                <th>
+                  <select
+                    value={tableFilters.stage}
+                    onChange={(event) => setTableFilters((current) => ({ ...current, stage: event.target.value }))}
+                  >
+                    <option value="all">Alle</option>
+                    {stages.map((stage) => <option key={stage} value={stage}>{stageName(stage)}</option>)}
+                  </select>
+                </th>
+                <th>
+                  <select
+                    value={tableFilters.status}
+                    onChange={(event) => setTableFilters((current) => ({ ...current, status: event.target.value }))}
+                  >
+                    <option value="all">Alle</option>
+                    {(Object.keys(STATUS_NAMES) as RouteCalculationCandidateStatus[]).map((status) => (
+                      <option key={status} value={status}>{STATUS_NAMES[status]}</option>
+                    ))}
+                  </select>
+                </th>
+                <th>
+                  <div className="calculation-range-filter">
+                    <input
+                      type="number"
+                      placeholder="min"
+                      value={tableFilters.qualityMin}
+                      onChange={(event) => setTableFilters((current) => ({ ...current, qualityMin: event.target.value }))}
+                    />
+                    <input
+                      type="number"
+                      placeholder="max"
+                      value={tableFilters.qualityMax}
+                      onChange={(event) => setTableFilters((current) => ({ ...current, qualityMax: event.target.value }))}
+                    />
+                  </div>
+                </th>
+                <th colSpan={3}>
+                  <input
+                    type="search"
+                    placeholder="Suche in Nr., Datum, Stufe, Status"
+                    value={tableFilters.query}
+                    onChange={(event) => setTableFilters((current) => ({ ...current, query: event.target.value }))}
+                  />
+                </th>
+              </tr>
             </thead>
             <tbody>
-              {filteredCandidates.map((candidate, index) => (
+              {tableCandidates.map((candidate, index) => (
                 <tr
                   key={candidate.id}
                   className={candidate.id === selectedCandidate?.id ? 'is-selected' : ''}
@@ -955,6 +1098,11 @@ export function RouteCalculationDialog({
                   <td>{metric(candidate.targetAlignmentDeg)}°</td>
                 </tr>
               ))}
+              {tableCandidates.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="calculation-table-empty">Keine Varianten passen zu den aktiven Filtern.</td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </section>
@@ -965,7 +1113,7 @@ export function RouteCalculationDialog({
           ? 'Nur vollständig geprüfte, flugfähige Kandidaten aus diesem aktuellen Solverlauf können übernommen werden.'
           : trace.running
             ? `Suche läuft bis mindestens ${targetGoodResults} gute Resultate gefunden oder alle Passagevarianten ausgeschöpft sind.`
-            : `${trace.candidates.length} Solvervarianten protokolliert. ${trace.stopReason ?? ''}`}</p>
+            : `${tableCandidates.length}/${trace.candidates.length} Solvervarianten sichtbar. ${trace.stopReason ?? ''}`}</p>
         <div className="calculation-footer-actions">
           {selectionMode
             ? (

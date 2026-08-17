@@ -238,6 +238,7 @@ export interface WaypointRouteResult {
         transferPreviewDays?: number
         desiredExitDirection?: [number, number, number]
         desiredExitRadialDirection?: [number, number, number]
+        optimizedPassageNormal?: [number, number, number]
         lineOfSightClear?: boolean
         bestApproximation?: boolean
         requiresCurvedTransfer?: boolean

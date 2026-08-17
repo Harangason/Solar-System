@@ -33,6 +33,7 @@ import { EntryCorridorMarker } from './EntryCorridorMarker'
 import { FlybyFocusInset } from './FlybyFocusInset'
 import { InterstellarTargets } from './InterstellarTargets'
 import { MilkyWayBackground } from './MilkyWayBackground'
+import { sanitizeMoonCatalogue } from '../moonCatalogue'
 import { MoonSystem } from './MoonSystem'
 import { Orbit } from './Orbit'
 import { ParameterPanel } from './ParameterPanel'
@@ -426,8 +427,9 @@ export function ThreeDView({
         return [solarData, moonData] as const
       })
       .then(([solarData, moonData]) => {
+        const sanitizedMoonCatalogue = sanitizeMoonCatalogue(moonData)
         setData(solarData)
-        setMoonCatalogue(moonData)
+        setMoonCatalogue(sanitizedMoonCatalogue)
         setSelectedPlanet(solarData.planets.find((planet) => planet.id === 'earth') ?? null)
       })
       .catch((requestError: Error) => {
@@ -1568,12 +1570,6 @@ export function ThreeDView({
                 </label>
               </div>
               {(simulationError || validationErrors.length > 0) && <div className="validation-box" role="alert">{simulationError ?? validationErrors.join(' ')}</div>}
-              <div className="panel-actions planner-simulation-actions">
-                <button className="primary" type="button" disabled={validationErrors.length > 0} onClick={() => void applySimulation()}>{result ? 'Simulation aktualisieren' : 'Simulation starten'}</button>
-                <button type="button" onClick={resetAll}>Alles zurücksetzen</button>
-                <button type="button" onClick={saveSimulationPreset}>Preset speichern</button>
-                <button type="button" onClick={loadSimulationPreset}>Preset laden</button>
-              </div>
             </div>
           </details>
           <details className="target-control-section" open>
