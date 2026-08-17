@@ -193,7 +193,16 @@ button { font: inherit; }
 .route-sketch-node { stroke: #07101f; stroke-width: .06; }
 .route-sketch-node.origin { fill: #79e7ff; }
 .route-sketch-node.target { fill: #ffda67; }
-.route-sketch-node.corridor-entry { fill: #8be8ff; stroke: #effcff; stroke-width: .055; filter: drop-shadow(0 0 .18px rgba(139,232,255,.9)); }
+.route-sketch-corridors path { fill: none; stroke-width: .22; stroke-linecap: round; pointer-events: none; }
+.route-sketch-corridors .entry { stroke: #67dcff; filter: drop-shadow(0 0 .16px rgba(103,220,255,.88)); }
+.route-sketch-corridors .exit { stroke: #ff9f67; filter: drop-shadow(0 0 .16px rgba(255,159,103,.88)); }
+.route-sketch-corridor-point { stroke: #07101f; stroke-width: .05; pointer-events: none; }
+.route-sketch-corridor-point.entry { fill: #67dcff; }
+.route-sketch-corridor-point.exit { fill: #ff9f67; }
+.route-corridor-projection-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 7px 12px; color: #90aabd; font-size: .65rem; }
+.route-corridor-projection-legend span::before { content: ''; display: inline-block; width: 18px; height: 3px; margin: 0 7px 2px 0; border-radius: 999px; background: currentColor; }
+.route-corridor-projection-legend .entry { color: #67dcff; }
+.route-corridor-projection-legend .exit { color: #ff9f67; }
 .route-sketch-label-2d { display: none; }
 .interstellar-direction-marker text { fill: #ffe56d; font-size: .52px; font-weight: 700; paint-order: stroke; stroke: #031027; stroke-width: .12; pointer-events: none; }
 .interstellar-direction-marker line { stroke: #7dff9f; stroke-width: .13; stroke-dasharray: .45 .25; }
@@ -1218,3 +1227,29 @@ button { font: inherit; }
   .wizard-route-preview { margin-top: 14px; padding: 14px; font-size: 1rem; }
   .route-section-wizard > footer { padding: 10px 16px; }
 }
+.trajectory-planner-panel { border: 1px solid rgba(121,228,255,.28); background: rgba(11,33,54,.45); }
+.trajectory-planner-panel > summary { color: #8be8ff; font-weight: 750; }
+.trajectory-planner-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; padding: 9px; }
+.trajectory-planner-grid label { display: grid; grid-template-columns: 1fr; gap: 3px; min-width: 0; color: #9eb5c7; font-size: .62rem; }
+.trajectory-planner-grid input,.trajectory-planner-grid select,.trajectory-waypoints input,.trajectory-waypoints select { min-width: 0; width: 100%; padding: 6px 7px; border: 1px solid rgba(255,255,255,.15); border-radius: 4px; color: #eaf8ff; background: #081525; }
+.trajectory-planner-grid label small { color: #6f91aa; }
+.trajectory-waypoints { padding: 0 9px 9px; }
+.trajectory-waypoints header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.trajectory-waypoints header button { padding: 5px 7px; }
+.trajectory-waypoints article { display: grid; grid-template-columns: 20px 1fr 1fr 80px 80px 25px; gap: 4px; align-items: center; margin-bottom: 4px; }
+.trajectory-aimpoint-fields { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 5px; padding: 5px; border-left: 2px solid rgba(255,218,103,.35); }
+.trajectory-aimpoint-fields label { color: #d6c885; font-size: .59rem; }
+.trajectory-aimpoint-fields label:first-child { grid-column: 1 / -1; display: flex; gap: 5px; align-items: center; }
+.trajectory-aimpoint-fields input[type="checkbox"] { width: auto; }
+.trajectory-planner-actions { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 9px 9px; }
+.trajectory-planner-actions button,.trajectory-waypoints button { border: 1px solid rgba(121,228,255,.24); border-radius: 4px; color: #ccecf6; background: rgba(121,228,255,.07); cursor: pointer; }
+.trajectory-planner-actions button { padding: 6px 8px; }
+.trajectory-planner-actions button:disabled { opacity: .4; cursor: default; }
+.trajectory-planner-error { margin: 0 9px 9px; color: #ffafbd; font-size: .66rem; }
+.trajectory-planner-result { display: grid; gap: 4px; margin: 0 9px 9px; padding: 8px; border: 1px solid rgba(103,245,154,.24); color: #bdd4e2; background: rgba(103,245,154,.04); font-size: .64rem; }
+.trajectory-planner-result strong { color: #9ff8c7; }
+.trajectory-planner-result small { color: #ffe99b; }
+.trajectory-candidate-list { max-height: 220px; margin: 0 9px 9px; padding-left: 25px; overflow: auto; font-size: .61rem; }
+.trajectory-candidate-list li { padding: 4px; border-bottom: 1px solid rgba(255,255,255,.07); }
+.trajectory-candidate-list li span { display: block; }
+@media (max-width: 480px) { .trajectory-planner-grid { grid-template-columns: 1fr; } .trajectory-waypoints article { grid-template-columns: 20px 1fr 25px; } .trajectory-waypoints article > :not(span):not(button):nth-child(n+3) { grid-column: 2; } }

@@ -24,7 +24,7 @@ import { appendPlaybackAuditEvent, startPlaybackAudit, type PlaybackEventType, t
 import type { RouteSectionDefinition } from '../routeSections'
 import { routeSectionsBlockReason } from '../routeSectionValidation'
 import { popSketchHistory, removeSketchSelection } from '../routeSketchState'
-import type { MissionConfig, MissionResult, MoonCatalogue, MoonData, PlanetData, SolarSystemData, VisualConfig } from '../types'
+import type { GenericTrajectoryPlannerResult, MissionConfig, MissionResult, MoonCatalogue, MoonData, PlanetData, SolarSystemData, VisualConfig } from '../types'
 import { MissionTrajectory } from './MissionTrajectory'
 import { DirectSolarRoute, type DirectSolarRouteResult } from './DirectSolarRoute'
 import { DraggableOverlayPanel } from './DraggableOverlayPanel'
@@ -402,6 +402,74 @@ export function ThreeDView({
   useEffect(() => clearPendingRouteSketch, [clearPendingRouteSketch])
 
   const visibleMissionResult = missionResultVisible && routePlanStatus === 'hidden' ? result : null
+
+  const applyGenericTrajectoryPlan = useCallback((trajectoryPlan: GenericTrajectoryPlannerResult) => {
+    const legacy = trajectoryPlan.legacyRoute
+    if (legacy && typeof legacy === 'object' && 'trajectory' in legacy && 'summary' in legacy) {
+      setPlannedRoute(legacy as WaypointRouteResult)
+    } else {
+      const trajectory = trajectoryPlan.trajectory
+      const finalPoint = trajectory.at(-1)
+      const targetPosition = trajectoryPlan.target.positionKm ?? finalPoint?.positionKm ?? [0, 0, 0]
+      const finalVelocity = finalPoint?.velocityKmS ?? [0, 0, 0]
+      const finalSpeed = Math.hypot(...finalVelocity)
+      const outgoingDirection = finalSpeed > 0
+        ? finalVelocity.map((component) => component / finalSpeed) as [number, number, number]
+        : [1, 0, 0] as [number, number, number]
+      const minimumSolarRadiusKm = Math.min(...trajectory.map((point) => Math.hypot(...point.positionKm)))
+      setPlannedRoute({
+        startDate: trajectoryPlan.start.date,
+        genericTarget: trajectoryPlan.target,
+        totalFlightDays: trajectoryPlan.summary.totalFlightDays,
+        warnings: trajectoryPlan.warnings,
+        trajectory,
+        segments: trajectoryPlan.segments,
+        waypoint: {
+          id: trajectoryPlan.target.bodyId ?? trajectoryPlan.target.zoneId ?? trajectoryPlan.target.boundaryId ?? trajectoryPlan.target.type,
+          name: trajectoryPlan.target.bodyId ?? trajectoryPlan.target.zoneId ?? trajectoryPlan.target.boundaryId ?? trajectoryPlan.target.type,
+          encounterDay: trajectoryPlan.summary.totalFlightDays,
+          flybyAltitudeKm: 0,
+          trajectoryIndex: Math.max(0, trajectory.length - 1),
+          positionKm: targetPosition,
+        },
+        outgoingDirection,
+        validation: {
+          collisionFree: minimumSolarRadiusKm >= 696_340,
+          minimumSolarRadiusKm,
+          sunRadiusKm: 696_340,
+          minimumSolarAltitudeKm: minimumSolarRadiusKm - 696_340,
+        },
+        summary: {
+          flybyMode: 'multi-section',
+          requiredInjectionDeltaVKmS: trajectoryPlan.summary.requiredInjectionDeltaVKmS ?? trajectoryPlan.summary.totalDeltaVKmS ?? 0,
+          availableInjectionDeltaVKmS: draft.oberthDeltaVKmS,
+          solarDepartureInjectionApplied: trajectoryPlan.summary.feasible,
+          incomingExcessSpeedKmS: trajectoryPlan.summary.departureVInfinityKmS ?? 0,
+          turnAngleDeg: 0,
+          heliocentricSpeedBeforeKmS: Math.hypot(...trajectoryPlan.start.velocityKmS),
+          heliocentricSpeedAfterKmS: trajectoryPlan.summary.finalHeliocentricSpeedKmS ?? finalSpeed,
+          speedGainKmS: (trajectoryPlan.summary.finalHeliocentricSpeedKmS ?? finalSpeed) - Math.hypot(...trajectoryPlan.start.velocityKmS),
+          targetCorrectionDeltaVKmS: trajectoryPlan.summary.arrivalVInfinityKmS ?? 0,
+          targetInjectionApplied: trajectoryPlan.summary.targetReached,
+          passiveTargeting: trajectoryPlan.summary.targetReached,
+          courseChangeDeg: trajectoryPlan.summary.targetAlignmentDeg ?? 0,
+          periapsisSpeedKmS: trajectoryPlan.summary.finalHeliocentricSpeedKmS ?? finalSpeed,
+          observationWindowHours: 0,
+          targetAlignmentDeg: trajectoryPlan.summary.targetAlignmentDeg ?? 0,
+          feasibleWithConfiguredBurn: trajectoryPlan.summary.feasible,
+          warnings: trajectoryPlan.warnings,
+          model: trajectoryPlan.summary.model,
+        },
+        audit: trajectoryPlan.audit as WaypointRouteResult['audit'],
+      })
+    }
+    setPlannedMissionDate(trajectoryPlan.start.date)
+    setRouteValidationPending(false)
+    setRoutePlanStatus('confirmed')
+    setMissionResultVisible(false)
+    setElapsedDays(0)
+  }, [draft.oberthDeltaVKmS, setPlannedMissionDate, setPlannedRoute])
+
   const playbackEndDay = plannedRoute?.totalFlightDays
     ?? plannedRoute?.trajectory.at(-1)?.elapsedDays
     ?? visibleMissionResult?.summary.totalFlightDays
@@ -1962,6 +2030,7 @@ export function ThreeDView({
 
       <ParameterPanel
         planets={data.planets}
+        moons={moonCatalogue.moons}
         moonCounts={moonCatalogue.counts}
         selectedPlanet={selectedPlanet}
         selectedObject={selectedObject}
@@ -1979,6 +2048,7 @@ export function ThreeDView({
         onSelectMoon={setSelectedMoon}
         onVisualChange={setVisual}
         onDraftChange={(nextDraft) => { setDraft(nextDraft); abortActivePlayback('spacecraft-configuration-changed'); setRouteValidationPending(Boolean(plannedRoute)); setOptimizationPreflight(null); setDirectSolarRoute(null); setOptimizationResult(null); setRouteError(null) }}
+        onApplyTrajectoryPlan={applyGenericTrajectoryPlan}
       />
       {visual.showScaleNotice && (
         <p className="floating-scale-note">Orbitale Darstellung: {visual.orbitScale} × √AE · Neigungen vertikal ×{visual.inclinationScale} · Körperradien proportional zueinander · Missionsbahn RK4 / N-Körper</p>
