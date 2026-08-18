@@ -20,7 +20,7 @@ import type { MissionConfig, MissionResult, VisualConfig } from './types'
 const TwoDView = lazy(() => import('./components/TwoDView').then(({ TwoDView }) => ({ default: TwoDView })))
 const ThreeDView = lazy(() => import('./components/ThreeDView').then(({ ThreeDView }) => ({ default: ThreeDView })))
 
-type ViewMode = 'menu' | '2d' | '3d'
+type ViewMode = 'menu' | 'calculation' | '2d' | '3d'
 
 export function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('menu')
@@ -339,6 +339,9 @@ export function App() {
               <button type="button" disabled={projectBusy} onClick={() => void showProjectDialog('open')}>Öffnen …</button>
             </div>
             <nav className="view-switcher" aria-label="Darstellung wechseln">
+              <button className={viewMode === 'calculation' ? 'active' : ''} type="button" onClick={() => setViewMode('calculation')}>
+                Berechnung
+              </button>
               <button className={viewMode === '2d' ? 'active' : ''} type="button" onClick={() => setViewMode('2d')}>
                 2D
               </button>
@@ -380,23 +383,28 @@ export function App() {
         <section className="chooser" aria-labelledby="chooser-title">
           <p className="eyebrow">Interaktive Expedition</p>
           <h1 id="chooser-title">Wie möchtest du das Sonnensystem erkunden?</h1>
-          <p className="intro">Wähle die wissenschaftliche 2D-Übersicht oder fliege frei durch das 3D-Modell.</p>
+          <p className="intro">Wähle zentrale Berechnungen, die wissenschaftliche 2D-Übersicht oder fliege frei durch das 3D-Modell.</p>
           <div className="choice-grid">
-            <button className="choice-card choice-2d" type="button" onClick={() => setViewMode('2d')}>
+            <button className="choice-card choice-calculation" type="button" onClick={() => setViewMode('calculation')}>
               <span className="choice-number">01</span>
-              <strong>Orbitalplaner 2D</strong>
-              <span>Zielkorridor zeichnen sowie reale Bahnverläufe von oben und entlang der Ekliptik prüfen.</span>
+              <strong>Berechnung</strong>
+              <span>Route, Zielkorridor, Solver, Trajectory Planner, Analyse und Plausibilität an einem Ort bündeln.</span>
+            </button>
+            <button className="choice-card choice-2d" type="button" onClick={() => setViewMode('2d')}>
+              <span className="choice-number">02</span>
+              <strong>2D Darstellung</strong>
+              <span>Bahnen, Projektionen und berechnete Missionsverläufe ohne Planungsbedienung ansehen.</span>
             </button>
             <button className="choice-card choice-3d" type="button" onClick={() => setViewMode('3d')}>
-              <span className="choice-number">02</span>
-              <strong>Interaktiv 3D</strong>
-              <span>Drehen, zoomen und Planeten auswählen – mit React Three Fiber.</span>
+              <span className="choice-number">03</span>
+              <strong>3D Darstellung</strong>
+              <span>Drehen, zoomen, Mission abspielen und Planeten auswählen, ohne Berechnungspanels.</span>
             </button>
           </div>
         </section>
       ) : (
         <Suspense fallback={<div className="loading">Ansicht wird geladen …</div>}>
-          {viewMode === '2d'
+          {viewMode === 'calculation' || viewMode === '2d'
             ? (
               <TwoDView
                 projectId={projectId}
@@ -408,6 +416,7 @@ export function App() {
                 plannedRoute={plannedRoute}
                 onApplyPlannedSolution={applyPlannedSolution}
                 missionConfig={missionConfig}
+                displayOnly={viewMode === '2d'}
               />
             )
             : (
@@ -421,8 +430,8 @@ export function App() {
                 onPlannedMissionDateChange={setPlannedMissionDate}
                 plannedRoute={plannedRoute}
                 onPlannedRouteChange={setPlannedRoute}
-                onOpenRoutePlanner={() => setViewMode('2d')}
-                onOpenRouteSelector={() => setSolverRouteDialogOpen(true)}
+                onOpenRoutePlanner={() => setViewMode('calculation')}
+                onOpenRouteSelector={() => setViewMode('calculation')}
                 restoredMissionConfig={missionConfig}
                 restoredVisualConfig={visualConfig}
                 restoredMissionResult={missionResult}
@@ -430,6 +439,7 @@ export function App() {
                 onMissionConfigChange={setMissionConfig}
                 onVisualConfigChange={setVisualConfig}
                 onMissionResultChange={setMissionResult}
+                displayOnly
               />
             )}
         </Suspense>
